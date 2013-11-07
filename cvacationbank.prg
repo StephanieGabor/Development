@@ -445,7 +445,7 @@ else
 endif 	
 
 *** Get Govmnt (YTD) entitlement 
-this.GetYTDVacDays_VACGOUV(this.nAPMCP_DAYSWKPERYEAR)
+this.GetYTDVacDays_VACGOUV(lnTotDaysWork)
 .nGVNTTotVacDays = .nYTDVacDays
 .nGVNTTotVacHH = this.ConvertTimeBankUnit(.nGVNTTotVacDays)
 
@@ -1123,8 +1123,7 @@ store 0 to lnFullMonthOfService, lnSchedHrsOfService
 *** Not worked at all in a given period 
 if empty(.nMTDHoursWorked)
 	this.WriteLog("GetFullMonthOfService() - " + ;
-			"lnFullMonthOfService = " + ;
-			transform(lnFullMonthOfService))
+			transform(lnFullMonthOfService) )
 
 	return lnFullMonthOfService
 endif 	
