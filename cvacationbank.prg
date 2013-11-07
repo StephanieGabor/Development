@@ -520,6 +520,7 @@ endproc
 
 *=========================================================
 #define GET_YEAR_TO_DATE_VACATION_DAYS 
+*** VACATT - is configured only trough the UI 
 *=========================================================
 protected procedure GetYTDVacDays_VACSEB(tnTotDaysWork)
 *** Get the YTD(Year To Date) entitlement from 

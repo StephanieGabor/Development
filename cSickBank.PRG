@@ -1,3 +1,43 @@
+*  Program...........: CSickBank.PRG
+*  Author............: Stefan Gabor 
+*  Project...........: Carver Human Resources Zoo62
+*  Created...........: November 08, 2013
+*  Code page.........: 1252 (WINDOWS)
+*  Copyright.........: (c) Carver Technologies 2013
+*
+*  Description.......: The class handles sick, mobile and compensatory days 
+*                    : calculation. 
+*							: The class is build around the plan id. Moreover, 
+*							: The calls currently is called from two different places 
+*							: 		1) annual entitlement 
+*							:		2) time sheet posting. 
+*                    :   
+* Specification      : 1 - The class handles real time entitlement for companies 
+*							: 	   which do not use the payroll system and the event 
+*							:     is triggered from the timesheet
+*							: 2 - Handles entitlement of multiple banks of 
+*                    : 	   the same type simultaneously
+*							:     
+*	Model 				: GetYTDVacDays__XXXXXXX(), where "XXXXXXX" 
+*							: 		must be replaced by the plan id.
+*							: 		Get the YTD (Year To Date) entitlement of number 
+*							:		of sick/mobile/compensatory days based on a 
+*							: 		predefined formula. 
+*							:
+* Call sequence      : 1 - GetSickBankObject(number of months of seniority) 
+*							:		in order to get a memory reference to the object. 
+*							:	   The method within creates and sets certain 
+*							:		properties to an object which is then return to 
+*							: 		the calling module. The reason behind it, 
+*							:		is that certain properties of the object may need 
+*							:		to be set from the calling module environment, 
+*							:		so the programmer needs to be able to do this. 
+*							: 2 - PostEntitlement(object) - this call will perform 
+*							:		the entitlement calculation.
+*							:
+*							:
+*#########################################################
+
 **** Class definition 
 define class CSickBank as custom 
 
