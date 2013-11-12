@@ -8,18 +8,21 @@
 *  Description.......: The class handles vacations days calculation. 
 *							: The class is roughly divided into 4 main components:
 *							: 1 - BuiltVacationTable_XXXXXXX 
-*							:		This is the procedure which builds a matrix/table based on 
-*							:		customer specific parameters. Some of these parameters include: 
+*							:		This is the procedure which builds a matrix/table 
+*                    :     based on customer specific parameters. 
+*                    :     Some of these parameters include: 
 *							:		years of seniority, number of hours/days last year, etc. 
 *							: 2 - GetVacationDays_XXXXXXX
-*							:		The procedure uses the matrix/table "TVac" and returns the number
-*							:		of vacation days to which an employee is entitled.  
+*							:		The procedure uses the matrix/table "TVac" and returns 
+*                    :     the number of vacation days to which an employee 
+*                    :     is entitled.  
 *							: 3 - SaveToCursor_XXXXXXX
-*							:		The procedure saves the vacation entitlement matrix into a FOXPRO table.
+*							:		The procedure saves the vacation entitlement matrix 
+*                    :     into a FOXPRO table.
 *							: 4 - GetYTDVacDays__XXXXXXX
-*                    : 		The procedure scans the vacation entitlement table, "TVac", 
-*							:		and returns the number of vacations days to which an employee 
-*							:		is entitled to date.
+*                    : 		The procedure scans the vacation entitlement table, 
+*                    :     "TVac", and returns the number of vacations days 
+*                    :     to which an employee is entitled to date.
 *                    :
 *                    :
 *  Technical Notes...: Model

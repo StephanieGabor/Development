@@ -98,9 +98,13 @@ endif
 *==========================================================
 procedure Opt_Valid(poThis)
 *
-if dodefault(poThis)
-	this.SetScreen(poThis,Optlist.TT_TYPE)
-endif 	
+dodefault(poThis)
+
+if type("poThis.Parent.cboExpense") = "O"
+	poThis.Parent.cboExpense.DisplayValue = ""
+	poThis.Parent.cboExpense.Requery(Optlist.TblId)
+endif 
+this.SetScreen(poThis,Optlist.TT_TYPE)
 
 return
 
@@ -145,7 +149,7 @@ return
 procedure FillInScheduleList()
 ***
 local loBizPlanDt, loSched, lcWkHours, lnN, lcDays
-local lcSchedType, lnSelect   
+local lcSchedType, lnSelect
 
 store null to loBizPlanDt, lcInOut
 store 0 to lnWkHours, lnN
@@ -156,6 +160,8 @@ with this
 if empty(.PersId)
 	return 
 endif 
+
+lnSelect = select()
 
 loBizPlanDt = this.oBizmgr.GetBiz("PLANDT")
 loSched = loBizPlandt.GetSched("/SCHED /OBJECT", ;
@@ -195,21 +201,17 @@ for lnN = 1 to 4
 		endif 
    endcase
 
-	if !empty(lcDays) and !empty(lcInOut)
+	if !empty(lcDays)
 		lcWkHours = HtoHM(lnWkHours, -1)
 
-		lnSelect = select()
-		select (.csrBankHrs)
-		locate for cHours = lcWkHours and !eof()
-		if !found()
-			insert into (.csrBankHrs) (cHours, cDescr, nHours, cInOut);
-				values (lcWkHours, lcDays, lnWkHours, lcInOut)
-		endif 
-		select (lnSelect)
+		insert into (.csrBankHrs) (cHours, cDescr, nHours, cInOut);
+			values (lcWkHours, lcDays, lnWkHours, lcInOut)
 	endif 
 next 
 
 endwith
+
+select(lnSelect)
 
 store null to loBizPlanDt, loSched
 return
@@ -256,7 +258,7 @@ endif
 
 if llExpenseAccount
 	if type("poThis.Parent.cboExpense") = "O"
-		lcValue = trim(leftto(poThis.DisplayValue,"-"))
+		lcValue = trim(leftto(poThis.Parent.cboExpense.DisplayValue,"-"))
 		poThis.Parent.cboExpense.Requery(lcValue)
 	endif 
 endif 
@@ -298,7 +300,9 @@ with poThis
 
 	*** Show expense account input 
 	.txtEUnit.visible = tlExpenseAccount
+	.txtEUnit.LabelObj.visible = tlExpenseAccount
 	.cboExpense.visible = tlExpenseAccount
+	.cboExpense.LabelObj.visible = tlExpenseAccount
 	
 	.Refresh()	
 endwith 

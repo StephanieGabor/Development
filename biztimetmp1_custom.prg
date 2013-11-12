@@ -47,24 +47,24 @@
 *#########################################################
 *** Properties:
 cPrimeOPT = ""
-cJobCatId = ""								&& Filter for Job Category 
+cJobCatId = ""									&& Filter for Job Category 
 
-nRndUpShiftStartMM = 0		 			&& Before the shift starts round up 
-nRndDownShiftStartMM = 0	 			&& After the shift starts round down  
-nRndUpLunchStartMM = 0 					&& Before lunch starts round up 
-nRndDownLunchStartMM = 0 				&& After lunch started round down
-nRndUpLunchEndMM = 0 					&& Before lunch ends round up   
-nRndDownLunchEndMM = 0	 				&& After lunch ends round down 
-nRndUpShiftEndMM = 0			 			&& Before the shift ends round up 
-nRndDownShiftEndMM = 0	 				&& After the shift ends round down  
+nRndUpShiftStartMM = 0		 				&& Before the shift starts round up 
+nRndDownShiftStartMM = 0	 				&& After the shift starts round down  
+nRndUpLunchStartMM = 0 						&& Before lunch starts round up 
+nRndDownLunchStartMM = 0 					&& After lunch started round down
+nRndUpLunchEndMM = 0 						&& Before lunch ends round up   
+nRndDownLunchEndMM = 0	 					&& After lunch ends round down 
+nRndUpShiftEndMM = 0			 				&& Before the shift ends round up 
+nRndDownShiftEndMM = 0	 					&& After the shift ends round down  
 
-cBANK_REALTIME_ENTITLEMENT="1,2,5"	&& Banks real time entitlement  
+cBANK_REALTIME_ENTITLEMENT="1,2,5,6"	&& Banks real time entitlement  
 
-cLogStatus = "startlog.txt" 			&& triggers for start logging 
-cLogPath = "\TEMP\" 						&& log folder 
-_DEBUG = .T.								&& set .T. for debugging 
+cLogStatus = "startlog.txt" 				&& triggers for start logging 
+cLogPath = "\TEMP\" 							&& log folder 
+_DEBUG = .T.									&& set .T. for debugging 
 
-nRoundInOutTo = 0                   && default rounding  
+nRoundInOutTo = 0                   	&& default rounding  
 *=========================================================
 #define SCHEDULE_ROUNDING_SCHEMA_AnalyseInOut
 *** Procedures related to AnalyseInOut which is use 
