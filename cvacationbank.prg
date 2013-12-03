@@ -113,9 +113,15 @@ procedure GetVacBankObject(tnSenMths)
 local loRS
 store null to loRS 
 
-*** set step on 
-if !used("qAPLAN") or (tnSenMths = 0)
+if !used("qAPLAN") 
 	this.WriteLog("GetVacBankObject() - qAPLAN not opened!")
+	return loRS 
+endif 
+
+*** set step on 
+if empty(tnSenMths) 
+	this.WriteLog("GetVacBankObject() - tnSenMths = " + ;
+						transform(tnSenMths) )
 	return loRS 
 endif 
 
@@ -183,7 +189,7 @@ endif
 
 *** Different date field for seniority 
 if !empty(qAPLAN.AP_SENDT)
-	ldSeniorField = trim(qAPLAN.AP_SENDT)
+	ldSeniorField = upper(trim(qAPLAN.AP_SENDT))
 	ldSeniorField = strtran(ldSeniorField, "PERS", "vPERS")
 	ldSeniorField = evaluate(ldSeniorField)
 

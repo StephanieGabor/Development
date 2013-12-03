@@ -46,6 +46,7 @@
  					as bizTIMETMP1 of bizTIMETMP1.PRG
 *#########################################################
 *** Properties:
+
 cPrimeOPT = ""
 cJobCatId = ""									&& Filter for Job Category 
 
@@ -58,7 +59,7 @@ nRndDownLunchEndMM = 0	 					&& After lunch ends round down
 nRndUpShiftEndMM = 0			 				&& Before the shift ends round up 
 nRndDownShiftEndMM = 0	 					&& After the shift ends round down  
 
-cBANK_REALTIME_ENTITLEMENT="1,2,5,6"	&& Banks real time entitlement  
+cBANK_REALTIME_ENTITLEMENT="1,2,5"		&& Banks real time entitlement  
 
 cLogStatus = "startlog.txt" 				&& triggers for start logging 
 cLogPath = "\TEMP\" 							&& log folder 
@@ -98,6 +99,11 @@ endif
 if inset(qJobhist.H_JOBCAT, this.cJobCatId)
 	llReturn = .t.
 endif 
+
+*** No filter set - round everything 
+if empty(this.cJobCatId) and !llReturn 
+	llReturn = .t.
+endif 	
 
 return llReturn
 
@@ -358,7 +364,7 @@ endif
 return 
 
 *=========================================================
-procedure AnalyseInOut_GetRoundingSchema()
+procedure AnalyseInOut_GetRoundingSchema(toSched)
 *** There is a difference between bizPlanDt and bizSched 
 * the way the object loSched is built. 
 * The procedure adds "Rules" property the the loSched 
@@ -372,7 +378,7 @@ store null to loBizSched, loCsrSched
 
 lnSelect = select()
 
-addproperty(loSched, "Rules", "")
+addproperty(toSched, "Rules", "")
 loBizSched = this.oBizMgr.GetBiz("SCHED")
 
 if isnull(loBizSched)
@@ -380,12 +386,12 @@ if isnull(loBizSched)
 	return
 endif 
 
-lcSchedId = trim(loSched.BaseSchedId)
+lcSchedId = trim(toSched.BaseSchedId)
 loCsrSched = loBizSched.GetById( ;
 				"/VIEW=vSched", "*", lcSchedId)
 
-if !isnull(loCsrSched)
-	loSched.Rules = trim(vSched.SC_RULES)
+if !isnull(loCsrSched) 
+	toSched.Rules = trim(vSched.SC_RULES)
 endif 
 	
 use in select("vSched")
@@ -405,16 +411,17 @@ local lnRSchemaCnt, lcProperty, lnPropertyValue, lcCommand
 
 store 0 to lnRSchemaCnt, lnPropertyValue
 store "" to lcProperty, lcCommand
+store null to loBizPlanDt 
 
 with this 
 
-if type("loSched") != "O" ;
+if type("loSched") = "U" ;
 or isnull(loSched)
 	return 
 endif 
 
 if type("loSched.Rules") = "U" 
-	.AnalyseInOut_GetRoundingSchema()
+	.AnalyseInOut_GetRoundingSchema(loSched)
 endif 
 
 if empty(loSched.Rules)
@@ -714,6 +721,7 @@ for lnJ = 1 to alen(laSickBank,1)
 	endif 	
 
 	*** Set custom properties 
+	loSickParm.nPERSID = tnPersId 
 	if !this.SetSickObjectProperty(@loSickParm)
 		loSickParm.cERROR = "ERROR: Setting up object custom property!"
 		exit 
@@ -723,6 +731,7 @@ for lnJ = 1 to alen(laSickBank,1)
 		loSickParm.cERROR = "Unable to get the DEPOOPT from APLAN!"
 		exit 
 	endif 
+
 
 	*** do entitlement 
 	loSickBank.PostEntitlement(@loSickParm)
@@ -780,7 +789,7 @@ return llOk
 protected procedure SetSickObjectProperty(toRS)
 *** Populate the objects' constants 
 *
-local lnSelect, lcEXPR, llOk 
+local lnSelect, lcEXPR, llOk
 store "" to lcEXPR
 llOk = .t. 
 
@@ -801,28 +810,12 @@ endif
 
 lnSelect = select()
 
-*** Get min, max dates from timesheet 
-select TT_PERSID, ;
-	min(TT_EFFDT) As MinEffDt, max(TT_EFFDT) As MaxEffDt ;
-from vTimetmp ;
-where TT_PERSID = qBatch.H_PERSID ;
-group by TT_PERSID ;
-into Cursor qTSDates 
-
-if reccount("qTSDates")=0 
-	toRS.cERROR = "The cursor qTSDates is empty!"
-	return .f. 
-endif 
-
 *** Real time posting of timesheet 
 toRS.IsTSRealTime = .t. 
 
 *** Pay period interval 
-toRS.dTSStartDt = MinEffDt 
-toRS.dTSEndDt = MaxEffDt
-
-*** Get the right PERSID
-toRS.nPERSID = qTSDates.TT_PERSID
+toRS.dTSStartDt = pdFrom 
+toRS.dTSEndDt = pdThru 
 
 *** Get the right counter 
 toRS.cTCNT = toRS.cPlanId
@@ -836,8 +829,6 @@ else
 	toRS.cERROR = "The counter expression is empty."
 endif
 toRS.cTSTCNT = lcEXPR
-
-use in select("qTSDates")
 
 select(lnSelect)
 return llOk 
@@ -891,6 +882,100 @@ select(lnSelect)
 return tcBankSet
 
 *=========================================================
+procedure AnalyseInOut
+parameters pcSwitches,pnPersid,pdIn,pcInout,poJobhist
+*** DEBUG only 
+local loRs 
+
+loRs = dodefault(pcSwitches,pnPersid,pdIn,pcInout,poJobhist)
+this.SpoolObjectProperties(loRs)
+
+return loRs
+
+*=========================================================
+procedure AnalyseInout_Effdt()
+*** Apply the rounding schema at the very end 
+*
+this.AnalyseInOut_AdjustTimeToScheduleHM()
+return dodefault()
+
+endproc 
+
+*=========================================================
+procedure GetRoundingSchemaObject(toSched)
+local lcCommand, loRS
+local lnPropertyValue, lnRSchemaCnt 
+local array laRoundSchema(20) 
+*
+store "" to lcCommand, lcProperty 
+store 0 to lnRSchemaCnt, lnPropertyValue 
+store null to loRS 
+
+if type("toSched")="U" ;
+or isnull(toSched)
+	return null 
+endif 
+
+*** Get schedule rules 
+if type("toSched.Rules")="U"
+	this.AnalyseInOut_GetRoundingSchema(toSched)
+endif 
+
+*** Create rounding schema object 
+loRS = this.CreateRoundingSchemaObject(toSched.BaseSchedId)
+
+lnRSchemaCnt = parse(toSched.Rules, @laRoundSchema, CRLF, "|", "/ALL")
+if lnRSchemaCnt < 1 
+	return null 
+endif 
+	
+for lnI = 1 to alen(laRoundSchema,1)
+	if !empty(laRoundSchema[lnI])
+		lcProperty = "loRS." + trim(leftto(laRoundSchema[lnI],"="))
+
+		if type(lcProperty) != "U" 
+			lnPropertyValue = val(rightFrom(laRoundSchema[lnI], "="))
+			lcCommand = lcProperty + "=" + transform(lnPropertyValue)
+
+			*/ Apply the settings to object properties 
+			&lcCommand
+		endif 
+	endif 
+next 
+
+store null to laRoundSchema
+return loRS
+
+*=========================================================
+procedure CreateRoundingSchemaObject(pcSchedId)
+*** Object factory for Rounding Schema 
+
+local loR
+
+loR = createobject("empty")
+
+*** Key 
+addproperty(loR, "SchedId", evl(pcSchedId,""))
+
+*** Start Shift Rounding  
+addproperty(loR, "nRndUpShiftStartMM", 0)
+addproperty(loR, "nRndDownShiftStartMM", 0)
+
+*** Start Lunch Rounding 
+addproperty(loR, "nRndUpLunchStartMM", 0)
+addproperty(loR, "nRndDownLunchStartMM", 0)
+
+*** Finish Lunch Rounding 
+addproperty(loR, "nRndUpLunchEndMM", 0)
+addproperty(loR, "nRndDownLunchEndMM", 0)
+
+*** Finish Shift Rounding 
+addproperty(loR, "nRndUpShiftEndMM", 0)
+addproperty(loR, "nRndDownShiftEndMM", 0)
+
+return loR
+
+*=========================================================
 procedure SpoolObjectProperties(toR As Object)
 *** S.G. - Logs all object properies 
 local lcAsisField
@@ -930,6 +1015,7 @@ if file(lcStartLog)
 endif 
 
 return
+
 
 *#########################################################
 enddefine

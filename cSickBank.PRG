@@ -389,12 +389,12 @@ endif
 
 text to lcWhere textmerge noshow pretext 1+4
 	T_PERSID = PERSNUMBER 
-	AND LEFT(T_OPT,3) = 'TOPTION'
+	AND T_OPT = 'TOPTION'
 	AND T_EFFDT BETWEEN 'STARTDATE' AND 'ENDDATE' 
 endtext 
 
 lcWhere = strtran(lcWhere,"PERSNUMBER", transform(.nPersId)) 
-lcWhere = strtran(lcWhere,"TOPTION", left(.cDepositOPT,3))
+lcWhere = strtran(lcWhere,"TOPTION", .cDepositOPT)
 lcWhere = strtran(lcWhere,"STARTDATE", dtoc(.dStartDt)) 
 lcWhere = strtran(lcWhere,"ENDDATE", dtoc(.dEndDt)) 
 
@@ -425,7 +425,7 @@ protected procedure GetSickDays_MALSEB()
 
 if .nTotDaysWorked = 0
 	this.WriteLog("GetSickDays_MALSEB() - " + ;
-			"nTotDaysWorked = " + transform(nTotDaysWorked))
+			"nTotDaysWorked = " + transform(.nTotDaysWorked))
 	return 
 endif 	
 
@@ -506,7 +506,7 @@ protected procedure GetSickDays_MALAPMCP()
 
 if .nTotDaysWorked = 0
 	this.WriteLog("GetSickDays_MALAPMCP() - " + ;
-			"nTotDaysWorked = " + transform(nTotDaysWorked))
+			"nTotDaysWorked = " + transform(.nTotDaysWorked))
 	return 
 endif 	
 
@@ -560,13 +560,12 @@ protected procedure GetSickDays_MOBSEB()
 *** Gets the current year's number of mobile days, 
 * to which an employee is entitled, maximum 6  
 *
-
 *** Add the days worked from timesheet 
 .nTotDaysWorked = .nTotDaysWorked + .nTSWorkedDays 
 
 if .nTotDaysWorked = 0
 	this.WriteLog("GetSickDays_MOBSEB() - " + ;
-			"nTotDaysWorked = " + transform(nTotDaysWorked))
+			"nTotDaysWorked = " + transform(.nTotDaysWorked))
 	return 
 endif 	
 
@@ -604,7 +603,7 @@ protected procedure GetSickDays_MOBATT()
 
 if .nTotDaysWorked = 0
 	this.WriteLog("GetSickDays_MOBSEB() - " + ;
-			"nTotDaysWorked = " + transform(nTotDaysWorked))
+			"nTotDaysWorked = " + transform(.nTotDaysWorked))
 	return 
 endif 	
 
@@ -645,7 +644,7 @@ protected procedure GetSickDays_TSSEB()
 
 if .nTotDaysWorked = 0
 	this.WriteLog("GetSickDays_TSSEB() - " + ;
-			"nTotDaysWorked = " + transform(nTotDaysWorked))
+			"nTotDaysWorked = " + transform(.nTotDaysWorked))
 	return 
 endif 	
 
