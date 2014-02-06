@@ -58,14 +58,29 @@ nRndUpLunchEndMM = 0 						&& Before lunch ends round up
 nRndDownLunchEndMM = 0	 					&& After lunch ends round down 
 nRndUpShiftEndMM = 0			 				&& Before the shift ends round up 
 nRndDownShiftEndMM = 0	 					&& After the shift ends round down  
+nRndDownShiftLatencyMM = 0		 			&& Shift latency round down  
 
-cBANK_REALTIME_ENTITLEMENT="1,2,5"		&& Banks real time entitlement  
+
+cBANK_REALTIME_ENTITLEMENT="1,2,5,7"	&& Banks real time entitlement  
 
 cLogStatus = "startlog.txt" 				&& triggers for start logging 
 cLogPath = "\TEMP\" 							&& log folder 
 _DEBUG = .T.									&& set .T. for debugging 
 
 nRoundInOutTo = 0                   	&& default rounding  
+
+
+*=========================================================
+#define SCHEDULE_ROUNDING_SCHEMA_HOTFIX
+**** HOT FIX **** OVERRIDE DEFAULT ROUNDING 
+*=========================================================
+procedure AnalyseInout_RoundIn (lcFromDtm)
+return lcFromDtm
+
+*=========================================================
+procedure AnalyseInout_RoundOut(lcToDTM)
+return lcToDTM
+
 *=========================================================
 #define SCHEDULE_ROUNDING_SCHEMA_AnalyseInOut
 *** Procedures related to AnalyseInOut which is use 
@@ -82,15 +97,10 @@ endif
 
 *** If the record is modified manually  
 * do not apply any rounding 
-if used("vTimetmp") ;
-and ttod(vTimetmp.TT_MODDT) <> {^1900/01/01} ;
-and (vTimetmp.TT_ENTERDT <> vTimetmp.TT_MODDT)
-
+if used("vNew") and !empty(vNew.TT_UNIQID)
 	*** debug 
 	this.WriteLog("IsRequiredRoundingToSchedule() - " + ;
-			"TT_MODDT = " + transform(vTimetmp.TT_MODDT))
-	this.WriteLog("IsRequiredRoundingToSchedule() - " + ;
-			"TT_ENTERDT = " + transform(vTimetmp.TT_ENTERDT))
+			"TT_UNIQID = " + transform(vNew.TT_UNIQID))
 
 	return llReturn 
 endif 
@@ -732,7 +742,6 @@ for lnJ = 1 to alen(laSickBank,1)
 		exit 
 	endif 
 
-
 	*** do entitlement 
 	loSickBank.PostEntitlement(@loSickParm)
 
@@ -789,8 +798,9 @@ return llOk
 protected procedure SetSickObjectProperty(toRS)
 *** Populate the objects' constants 
 *
-local lnSelect, lcEXPR, llOk
+local lnSelect, lcEXPR, loBizPayno, llOk
 store "" to lcEXPR
+store null to loBizPayno
 llOk = .t. 
 
 if type("toRS")!="O" or isnull(toRS)
@@ -820,6 +830,9 @@ toRS.dTSEndDt = pdThru
 *** Get the right counter 
 toRS.cTCNT = toRS.cPlanId
 
+*** Get the original hire date 
+toRS.dOriginalHiredDt = qJobhist.E_ORIGHIRE
+
 *** Strip counter to use timetmp  
 lcEXPR = TCNTVAL("EXPR", toRS.cTCNT)
 if !empty(lcEXPR)
@@ -829,6 +842,25 @@ else
 	toRS.cERROR = "The counter expression is empty."
 endif
 toRS.cTSTCNT = lcEXPR
+
+*** Get pay cycle property 
+loBizPayno = GetBiz("PAYNO")
+if isnull(loBizPayno)
+	return 
+endif 	
+
+*** Get the current payno
+lcPayno = trim(loBizPayno.GetCurrentPayno (;
+				toRS.cPayGRP, toRS.dTSStartDt))
+
+*** Info about the pay period fron PAYNO
+lcPayCycle = loBizPayno.GetValueById( ;
+					lcPayNo, "PN_CYCLE")
+
+toRS.cPayCycle = alltrim(lcPayCycle)
+toRS.IsThe2ndPay = (atw("2",toRS.cPayCycle)>0)
+
+store null to loBizPayno
 
 select(lnSelect)
 return llOk 

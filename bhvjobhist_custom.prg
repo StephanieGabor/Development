@@ -287,5 +287,171 @@ endif
 return 
 endproc
 
+
+*!*	*========================================================
+*!*	procedure ValSal (pcFLDNAME)
+*!*	*** Called by COMPSALARY above and from DEFAULTS routines
+*!*	*** Validates salary, unit rate, etc. against RPLAN and RATE.
+*!*	*** Returns .f. if hard error.
+
+*!*	set step on 
+
+*!*	*** Make sure JOB is current
+*!*	if !inlist(vJobhist.H_JOBID, vJob.J_JOBID, "", "*")
+*!*		*** Requery .oJob
+*!*		this.oDset.oJob = null
+*!*		this.oDset.oJob = this.oBizJob.GetByID("/cursor=vjob", ;
+*!*						"", vJobhist.H_JOBID)
+*!*		select vJobhist
+*!*	endif
+
+*!*	private lcCalcFld 	&& Name of field to which limits apply
+*!*	*		SALARY, UNITRATE, ANNUAL, ANNUALFT
+*!*	private lnValue, lnPrevValue			&& Not local!
+*!*	private lnMinVal, lnMaxVal, lnSuggVal
+*!*	** Don't hide VV* or H_*
+*!*	local llHard		&& Is this a hard error? (not just a warning)
+*!*	local lcMsg, loMsgMark
+
+*!*	*** Get max, min, etc.
+*!*	this.GetRates ("/REEVAL")
+
+*!*	*** Pick up these already stored as properties
+*!*	llHard = this.RateHardErr and !vJobhist.H_RedCirc
+*!*	lcCalcFld = this.oThisForm.CalcFld
+*!*	lnMinVal = this.oThisform.MinVal
+*!*	lnMaxVal = this.oThisform.MaxVal
+*!*	lnSuggVal = this.oThisform.SuggVal
+
+*!*	if empty(lcCalcFld) and lnMaxVal = 0 and lnMinVal = 0
+*!*		*** Nothing to do
+*!*		select vJobhist
+*!*		return
+*!*	endif
+
+*!*	if ! "S" $ this.MCapabil ;
+*!*	and (! llHard or lnSuggVal = 0)
+*!*		*** No access to salaries
+*!*		return
+*!*	endif
+
+*!*	select vJobhist
+
+*!*	*** We are going to work with memvars, because if it is a
+*!*	*   hard error we don't want to change values.
+*!*	if empty(pcFldName) or type("m.vvSalary")<>"N"
+*!*		*** Load values to memvars
+*!*		scatter memvar fields ;
+*!*				vvUNITRATE, vvSALARY, vvANNUAL, vvAnnualFT, vvOthrate, ;
+*!*				H_PayFreq, H_HrsPer, H_PctTime, H_RedCirc
+*!*	endif
+
+*!*	lnPrevValue = oldval("VV" + lcCALCFLD, "vJobhist")
+*!*	if isnull(lnPrevValue) or lnPrevValue = 0
+*!*		lnPrevValue = evaluate("vv" + lcCalcFld)
+*!*	endif
+*!*	lnValue = eval("m.VV" + lcCALCFLD)
+*!*	lcMsgKey = ""
+
+*!*	do case
+*!*	*** Revised approach October 20, 2006.
+*!*	case lnSuggVal <> 0 and !m.H_REDCIRC ;
+*!*	 and lnMinVal = 0 and lnMaxVal = 0
+*!*		*** There is only a suggested salary (no min or max).  Use it.
+*!*		this.oThisform.lForceSalary = llHard
+
+*!*		store lnSuggVal to ("vv" + lcCalcFld)
+*!*		*** This will update the memvars
+*!*		this.oBizRemun.JHCALC (lcCalcFld, ;
+*!*						@m.vvUNITRATE, ;
+*!*						@m.vvSALARY, ;
+*!*						@m.vvANNUAL, ;
+*!*						@m.vvANNUALFT, ;
+*!*						m.H_PAYFREQ, ;
+*!*						m.H_HRSPER, ;
+*!*						m.H_PCTTIME, ;
+*!*						m.H_REDCIRC, ;
+*!*						"vJobhist")
+
+*!*		*** Round ANNUAL and ANNUALFT if necessary
+*!*		if len(vjobhist.H_ANNUAL) <= 10 ;
+*!*		or (type("C_RNDANNU1") = "L" and C_RNDANNU1)
+*!*			*-- TCG 2009-06-22 -- Round AnnualFT only.
+*!*			*   Keep full ANNUAL decimals in data base
+*!*	*		vvAnnual = round(m.vvAnnual,0)	&& Removed TCG 2009-06-22
+*!*			vvAnnualFt = round(m.vvAnnualFt,0)
+*!*		endif
+
+*!*		if lnPrevValue <> lnSuggVal
+*!*			*** Show info message the rate was changed
+*!*			lcFldName = goMsgMgr.GetText ("ZOO.JOBHIST.SALARY_FLD_NAME1")
+*!*			lcMsgKey = "ZOO.JOBHIST.SAL_CHANGED"
+*!*		endif
+
+*!*	case ! "S" $ this.MCapabil
+*!*		*** No access to salaries
+*!*		return
+
+*!*	case lnSUGGVAL <> 0
+*!*		this.oThisform.lForceSalary = .f.
+*!*		lcFldName = goMsgMgr.GetText ("ZOO.JOBHIST.SALARY_FLD_NAME1")
+*!*		if lnSuggVal <> lnValue
+*!*			lcMsgKey = "ZOO.JOBHIST.SAL_SUGGEST_" + ;
+*!*				iif(m.H_REDCIRC or between(lnValue, lnMinVal, lnMaxVal), ;
+*!*										"WARN", "ERROR")
+*!*		endif
+
+*!*	case lnValue < lnMINVAL
+*!*		this.oThisform.lForceSalary = .f.
+*!*		lcFldName = goMsgMgr.GetText ("ZOO.JOBHIST.SALARY_FLD_NAME1")
+*!*		lcMsgKey = "ZOO.JOBHIST.SAL_UNDER_MIN_" + ;
+*!*						iif(m.H_REDCIRC, "WARN", "ERROR")
+
+*!*	case lnValue > lnMAXVAL and lnMaxVal <> 0
+*!*		this.oThisform.lForceSalary = .f.
+*!*		lcFldName = goMsgMgr.GetText ("ZOO.JOBHIST.SALARY_FLD_NAME1")
+*!*		lcMsgKey = "ZOO.JOBHIST.SAL_OVER_MAX_" + ;
+*!*						iif(m.H_REDCIRC, "WARN", "ERROR")
+
+*!*	otherwise
+*!*		this.oThisform.lForceSalary = .f.
+*!*		loMsgMark = findobj(this.oThisform, "msgRemun")
+*!*		if !isnull(loMsgMark)
+*!*			*** Clear message in MsgMark
+*!*			loMsgMark.SetMsg ("")
+*!*		endif
+*!*		lcMsgKey = ""
+*!*	endcase
+
+*!*	*** Update cursor with calculated results
+*!*	*** Apply TRY/CATCH to prevent overflow, particularly on CompaNew.
+*!*	try
+*!*		gather memvar fields ;
+*!*				 vvUNITRATE, vvSALARY, vvANNUAL, vvAnnualFT
+*!*		replace vvComparat with this.oThisform.CompaNew
+*!*	catch
+*!*	endtry
+
+*!*	*** Show message
+*!*	do case
+*!*	case empty(lcMsgKey) or !"S" $ this.MCapabil
+*!*		*** Nothing to do
+*!*	case !empty(pcFldName) and ;
+*!*			inlist(pcFldName, "SALARY", "UNITRATE", "ANNUAL", "ANNUALFT")
+*!*		*** Show message immediately
+*!*		return !llHard or between(lnValue, lnMinVal, lnMaxVal)
+*!*	otherwise
+*!*		loMsgMark = findobj(this.oThisform, "msgRemun")
+*!*		if isnull(loMsgMark)
+*!*			*** Show message immediately
+*!*			return !llHard or between(lnValue, lnMinVal, lnMaxVal)
+*!*		else
+*!*			*** Put message into MsgMark
+*!*			loMsgMark.SetMsg (lcMsgKey)
+*!*		endif
+*!*	endcase
+
+*!*	return .t.
+
 enddefine
 *#########################################################

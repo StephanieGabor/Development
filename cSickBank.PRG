@@ -42,24 +42,24 @@
 **** Class definition 
 define class CSickBank as custom 
 
-nFullMonthServicePCT = .5  		&& Precent given for full month of service 
-nMontlyAVGWorkHours = 130			&& Monthly average working hours  
-nAPMCP_DAYSWKPERYEAR = 248.6		&& APMCP maximum yearly working days
-nMALAPMCP_SICKDAYSPERYEAR = 5		&& APMCP maximum sick days per year  
-nSEB_DAYSWKPERYEAR = 260 			&& SEB maximum yearly working days 
-nMALSEB_SICKDAYSPERYEAR = 10		&& SEB maximum sick days per year  
-nMOBSEB_MOBILEDAYSPERYEAR = 6		&& SEB & ATT maximum mobile days per year  
-nCOMPENSATORY_TIME_YEAR = 5		&& Compensatory time / year 
-nMALSEB_WAITINGPERIODDAYS= 4		&& SEB waiting period number of days 
+nFullMonthServicePCT = .5  			&& Precent given for full month of service 
+nMontlyAVGWorkHours = 130				&& Monthly average working hours  
+nAPMCP_DAYSWKPERYEAR = 248.6			&& APMCP maximum yearly working days
+nMALAPMCP_SICKDAYSPERYEAR = 5			&& APMCP maximum sick days per year  
+nSEB_DAYSWKPERYEAR = 260 				&& SEB maximum yearly working days 
+nMALSEB_SICKDAYSPERYEAR = 10			&& SEB maximum sick days per year  
+nMOBSEB_MOBILEDAYSPERYEAR = 6			&& SEB & ATT maximum mobile days per year  
+nMALSEB_WAITINGPERIODDAYS= 4			&& SEB waiting period number of days 
 
-nATT_DAYSWKPERYEAR = 260 			&& ATT maximum yearly working days 
-nMALATT_SICKDAYSPERYEAR = 10		&& ATT maximum sick days per year  
-nMALATT_WAITINGPERIODDAYS= 4		&& ATT waiting period number of days 
+nATT_DAYSWKPERYEAR = 260 				&& ATT maximum yearly working days 
+nMALATT_SICKDAYSPERYEAR = 10			&& ATT maximum sick days per year  
+nMALATT_WAITINGPERIODDAYS= 4			&& ATT waiting period number of days 
+nRECAPMCP_STARTDATE= {1991/07/25} 	&& APMCP compensation start date  
 
 *** Property 
-cLogStatus 	= "startlog.txt" 		&& start logging 
-cLogPath = "\TEMP\" 					&& log folder 
-_DEBUG = .T.							&& set .T. for debugging 
+cLogStatus 	= "startlog.txt" 			&& start logging 
+cLogPath = "\TEMP\" 						&& log folder 
+_DEBUG = .T.								&& set .T. for debugging 
 
 
 *=========================================================
@@ -76,8 +76,14 @@ procedure PostEntitlement(toRS As Object)
 *				 for calculation.
 *
 if type("toRS")!="O" or isnull(toRS)
-	this.WriteLog("DepositBeginningOfYear() - Invalid Object!")
+	this.WriteLog("PostEntitlement() - Invalid Object!")
 	return loRS 
+endif 
+
+*** Validation of plan dates and timesheet dates 
+if !this.ValidateEntitlement(toRS)
+	this.SpoolObjectProperties(toRS)
+	return toRS 
 endif 
 
 with toRS 
@@ -92,6 +98,27 @@ use in select("TVac")
 return toRS 
 
 endproc
+
+*=========================================================
+protected procedure ValidateEntitlement(toRS As Object)
+* The timesheet dates must be within the plan date range 
+* in order to propely do real time bank entitlement.
+*
+local llOk 
+llOk = .t. 
+
+if toRS.IsTSRealTime
+	*** If TS start date is greater than the plan end date.
+	if toRS.dTSStartDt > toRS.dEndDt
+		llOk = .f.	
+	endif 
+endif 
+
+if !llOk 
+	toRS.cERROR="Plan date range & TS date range are not in sync."
+endif 
+
+return llOk
 
 *=========================================================
 procedure GetSickBankObject(tnSenMths)
@@ -163,12 +190,36 @@ if used("qJobhist") and empty(.cSchedId)
 	.cSchedId = trim(qJobhist.H_SCHEDID)
 endif 
 
+*** Load pay group into object 
+if used("vJobhist") and empty(.cPayGRP)
+	.cPayGRP = trim(vJobhist.H_PAYGRP)
+endif 
+if used("qJobhist") and empty(.cPayGRP)
+	.cPayGRP = trim(qJobhist.H_PAYGRP)
+endif 
+
 *** Load jobhist effdt into object 
 if used("vJobhist") and empty(.dEffDt)
 	.dEffDt = vJobhist.H_EFFDT 
 endif 
 if used("qJobhist") and empty(.dEffDt)
 	.dEffDt = qJobhist.H_EFFDT 
+endif 
+
+*** Recuparation bank APMCP 
+if "APMCP"$alltrim(.cUnionId)
+	do case 
+	case "APM35"$.cSchedId 
+		.nRECAPMCP_DPY = 5
+	case "RETR28"$.cSchedId 
+		.nRECAPMCP_DPY = 4
+	case "RETR21"$.cSchedId
+		.nRECAPMCP_DPY = 3
+	case "RETR14"$.cSchedId
+		.nRECAPMCP_DPY = 2
+	case "RETR4V"$.cSchedId
+		.nRECAPMCP_DPY = 4
+	endcase 
 endif 
 
 *** Rest of the properties 
@@ -209,6 +260,20 @@ if llYearlyCalc
 	.cTCNT = trim(qAPLAN.AP_YTCNT)
 endif 
 
+*** Get MAX & MIN of the plan 
+if val(qAPLAN.AP_BALMIN) != 0 ;
+or empty(qAPLAN.AP_BALMIN)
+	.nPlanBalMin = val(qAPLAN.AP_BALMIN)
+else 
+	.nPlanBalMin = evaluate(qAPLAN.AP_BALMIN)
+endif 	
+if val(qAPLAN.AP_BALMAX) != 0 ;
+or empty(qAPLAN.AP_BALMAX)
+	.nPlanBalMax = val(qAPLAN.AP_BALMAX)
+else 
+	.nPlanBalMax = evaluate(qAPLAN.AP_BALMAX)
+endif 	
+
 *** Get the bank unit HOURS or DAYS 
 .cBankUnit = trim(tbleval("TIMEBANK", .cBankId, "TBLC1"))
 
@@ -222,7 +287,37 @@ endif
 .nHRSPDY = loBizSched.WkCal("AVHRSPDY", ;
 			.cSchedId, .dEffDt )
 
+*** Add pay calendar dates 
+this.GetPayPeriod()
+
 store null to loBizSched
+
+return 
+endproc
+
+*=========================================================
+procedure GetPayPeriod()
+*** The PIVOT query give the data on multiple lines, 
+* however, we need to have the data summarized by 
+* expense id and by PERSID. - S.G.
+*  
+local loBizPayno, loBizTimeDt
+local lcPayNo, lcLastPayNo
+local lcPayCycle
+
+store null to loBizPayno, loBizTimeDt
+store "" to lcPayGRP, lcPayNo, lcLastPayNo, lcPayCycle
+
+loBizPayno = GetBiz("PAYNO")
+loBizTimeDt = GetBiz("TIMEDT")
+
+lcPayNo = .cPayGRP + left(dtos(date()), 4) + "01"
+.dPayPeriodStartDt=loBizPayno.GetValueById(lcPayNo, "PN_STARTDT")
+
+lcLastPayNo = loBizPayno.GetLastPayNo(left(lcPayNo, 8), "/REG")
+.dPayPeriodEndDt=loBizPayno.GetValueById(lcLastPayNo, "PN_ENDDT")
+
+store null to loBizPayno, loBizTimeDt
 
 return 
 endproc
@@ -239,15 +334,15 @@ protected procedure GetPRORATA()
 local lcCommand
 store "" to lcCommand 
 
-*** Generic stuff that applies to plan 
-this.GetPRORATAEntitlement(.dStartDt,.dEndDt)
-	
 *** Include current transactions from timesheet, 
 * that are in progress of posting.  
 if nvl(.IsTSRealTime,.f.) = .t.
 	this.GetPRORATA_TIMESHEET()
 	this.GetYTDBankDeposit()
 endif 
+
+*** Generic stuff that applies to plan 
+this.GetPRORATAEntitlement(.dStartDt,.dEndDt)
 
 *** Plan specific stuff 
 if lower(pemstatus(this, "GetSickDays_" + ;
@@ -355,8 +450,18 @@ endtext
 
 lcWhere = strtran(lcWhere,"PERSNUMBER", transform(.nPersId)) 
 lcWhere = strtran(lcWhere,"COUNTER", .cTSTCNT) 
-lcWhere = strtran(lcWhere,"STARTDATE", dtoc(.dTSStartDt)) 
+
+*** Timesheet containts dates from previous plan period 
+if (year(.dTSEndDt)-year(.dTSStartDt))>0
+	lcWhere = strtran(lcWhere,"STARTDATE", dtoc(JAN1(.dTSEndDt))) 
+else	
+	lcWhere = strtran(lcWhere,"STARTDATE", dtoc(.dTSStartDt)) 
+endif
 lcWhere = strtran(lcWhere,"ENDDATE", dtoc(.dTSEndDt)) 
+
+*** Debug 
+this.WriteLog("GetPRORATA_TIMESHEET() - " + ;
+	"lcWhere = " + transform(lcWhere))
 
 loBizTimetmp = Getbiz("TIMETMP1")
 loBizTimetmp = loBizTimetmp.GetList("/CURSOR=qTimeT2", ;
@@ -402,6 +507,10 @@ loBizTimeDt = Getbiz("TIMEDT")
 loBizTimeDt = loBizTimeDt.GetList("/CURSOR=qTimeDt1", ;
 					"SUM(T_HOURS) AS T_HOURS", lcWhere)
 
+*** Debug 
+this.WriteLog("GetYTDBankDeposit() - " + ;
+	"lcWhere = " + transform(lcWhere))
+
 if !isnull(loBizTimeDt)
 	.nYTDBankDeposit = nvl(qTimeDt1.T_HOURS, 0)
 
@@ -420,7 +529,16 @@ protected procedure GetSickDays_MALSEB()
 * (+/-) 4 waiting period in days 
 *
 
-*** Add the days worked from timesheet 
+*** Verify that the yearly entitlment has been completed.
+if .dTSStartDt > .dEndDt
+	this.WriteLog("GetSickDays_MALSEB() - " + ;
+		"The entitlement has not been rolled over!")
+
+	.cERROR = "The entitlement has not been rolled over!"
+endif 
+
+*** Sick bank should not take the previous year hours  
+*** Total days worked are populated by the timesheet  
 .nTotDaysWorked = .nTotDaysWorked + .nTSWorkedDays 
 
 if .nTotDaysWorked = 0
@@ -458,9 +576,10 @@ protected procedure GetSickDays_MALATT()
 * to which an employee is entitled, maximum 10 
 * (+/-) 4 waiting period in days 
 *
-** set step on 
 
+*** set step on 
 *** Add the days worked from timesheet 
+*** Total days worked are populated by the timesheet  
 .nTotDaysWorked = .nTotDaysWorked + .nTSWorkedDays 
 
 if .nTotDaysWorked = 0
@@ -468,6 +587,14 @@ if .nTotDaysWorked = 0
 			"nTotDaysWorked = " + transform(.nTotDaysWorked))
 	return 
 endif 	
+
+*** Verify that the yearly entitlment has been completed.
+if .dTSStartDt > .dEndDt
+	this.WriteLog("GetSickDays_MALSEB() - " + ;
+		"The entitlement has not been rolled over!")
+
+	.cERROR = "The entitlement has not been rolled over!"
+endif 
 
 *** Get the MAX number of working days per union  
 if .nTotDaysWorked > this.nATT_DAYSWKPERYEAR
@@ -500,7 +627,6 @@ protected procedure GetSickDays_MALAPMCP()
 * APMCP ratio (5/248.6) ~ .0201126307320998
 *
 
-*** set step on 
 *** Add the days worked from timesheet 
 .nTotDaysWorked = .nTotDaysWorked + .nTSWorkedDays 
 
@@ -510,15 +636,23 @@ if .nTotDaysWorked = 0
 	return 
 endif 	
 
+*** Verify that the yearly entitlment has been completed.
+if .dTSStartDt > .dEndDt
+	this.WriteLog("GetSickDays_MALAPMCP() - " + ;
+		"The entitlement has not been rolled over!")
+
+	.cERROR = "The entitlement has not been rolled over!"
+endif 
+
 *** Get the MAX number of working days per union  
 if .nTotDaysWorked > this.nAPMCP_DAYSWKPERYEAR
 	.nMAXDaysWorked = this.nAPMCP_DAYSWKPERYEAR
 	.nTotDaysWorked = .nMAXDaysWorked 
 endif 	
 
-*** 10 sick days / 260 days per year 
-.nYTDSickDays=(this.nMALAPMCP_SICKDAYSPERYEAR/this.nAPMCP_DAYSWKPERYEAR)*;
-			.nTotDaysWorked
+*** 5 sick days / 248.60 days per year 
+.nYTDSickDays=(this.nMALAPMCP_SICKDAYSPERYEAR / ;
+		this.nAPMCP_DAYSWKPERYEAR)*.nTotDaysWorked
 
 *** Sum up the totals  
 .nTotSickDays = .nYTDSickDays
@@ -546,9 +680,23 @@ if .nFullMonthOfService = 0
 	return 
 endif 
 
+*** Verify that the yearly entitlment has been completed.
+if .dTSStartDt > .dEndDt
+	this.WriteLog("GetSickDays_MALGOUV() - " + ;
+		"The entitlement has not been rolled over!")
+
+	.cERROR = "The entitlement has not been rolled over!"
+endif 
+
 .nTotSickDays = .nFullMonthOfService 
 .nTotSickHH = .nTotSickHH + ;
 		this.ConvertTimeBankUnit(.nTotSickDays)
+
+*** Entitlement Year Yo Date - real time 
+.nEntitleHH = (.nTotSickHH - .nYTDBankDeposit)
+if (.nHRSPDY != 0)
+	.nEntitleDays = .nEntitleHH / .nHRSPDY
+endif 
 
 return
 endproc
@@ -614,8 +762,8 @@ if .nTotDaysWorked > this.nSEB_DAYSWKPERYEAR
 endif 	
 
 *** 6 sick days / 260 days per year 
-.nYTDSickDays=(this.nMOBSEB_MOBILEDAYSPERYEAR/this.nSEB_DAYSWKPERYEAR)*;
-			.nTotDaysWorked 
+.nYTDSickDays=(this.nMOBSEB_MOBILEDAYSPERYEAR / ;
+		this.nSEB_DAYSWKPERYEAR)*.nTotDaysWorked 
 
 *** Sum up the totals  
 .nTotSickDays = .nYTDSickDays
@@ -633,29 +781,36 @@ endproc
 *=========================================================
 #define GET_COMPENSATORY_TIME_DAYS_BY_PLAN 
 *=========================================================
-protected procedure GetSickDays_TSSEB()
+protected procedure GetSickDays_RECAPMCP()
 *** Gets the current year's number of days, 
 * of compensatory time to which an employee is 
 * yearly entitled, maximum 5.  
 *
-
 *** Add the days worked from timesheet 
 .nTotDaysWorked = .nTotDaysWorked + .nTSWorkedDays 
 
+*** set step on 
 if .nTotDaysWorked = 0
-	this.WriteLog("GetSickDays_TSSEB() - " + ;
+	this.WriteLog("GetSickDays_RECAPMCP() - " + ;
 			"nTotDaysWorked = " + transform(.nTotDaysWorked))
 	return 
 endif 	
 
+if .dOriginalHiredDt < this.nRECAPMCP_STARTDATE
+	this.WriteLog("GetSickDays_RECAPMCP() - " + ;
+			"nRECAPMCP_STARTDATE = " + ;
+			transform(this.nRECAPMCP_STARTDATE))
+	return 
+endif 
+
 *** Get the MAX number of working days per union  
-if .nTotDaysWorked > this.nSEB_DAYSWKPERYEAR
-	.nMAXDaysWorked = this.nSEB_DAYSWKPERYEAR
+if .nTotDaysWorked > this.nAPMCP_DAYSWKPERYEAR
+	.nMAXDaysWorked = this.nAPMCP_DAYSWKPERYEAR
 	.nTotDaysWorked = .nMAXDaysWorked 
 endif 	
 
 *** 5 sick days / 260 days per year 
-.nYTDSickDays=(this.nCOMPENSATORY_TIME_YEAR/this.nSEB_DAYSWKPERYEAR)*;
+.nYTDSickDays=(.nRECAPMCP_DPY/this.nAPMCP_DAYSWKPERYEAR)*;
 			.nTotDaysWorked 
 
 *** Sum up the totals  
@@ -670,6 +825,16 @@ endif
 
 return
 endproc
+
+*=========================================================
+#define GET_FLEXIBLE_DAYS_BY_PLAN 
+*=========================================================
+protected procedure GetSickDays_FLEX()
+
+
+
+
+return 
 
 *=========================================================
 #define HELPER_METHODS 
@@ -717,10 +882,18 @@ endproc
 *=========================================================
 protected procedure GetFullMonthOfService()
 *** Assign 1 day off if more than 1/2 of month 
-* has been worked 
+* has been worked.
+* We need to take into account the transaction 
+* from timesheet that are posted realtime.
 *
-local lnFullMonthOfService, lnSchedHrsOfService 
+local lnFullMonthOfService, lnSchedHrsOfService
 store 0 to lnFullMonthOfService, lnSchedHrsOfService
+
+*** Take into account TS 
+if nvl(.IsTSRealTime,.f.) = .t. and ;
+between(month(.dStartOfMonthDt),month(.dTSStartDt),month(.dTSEndDt))
+	.nMTDHoursWorked = .nMTDHoursWorked + .nTSWorkedHH
+endif 
 
 *** Not worked at all in a given period 
 if empty(.nMTDHoursWorked)
@@ -734,7 +907,7 @@ if lnSchedHrsOfService = 0
 	lnSchedHrsOfService = this.nMontlyAVGWorkHours
 endif 
 	
-lnFullMonthOfService = iif(lnSchedHrsOfService >= ;
+lnFullMonthOfService = iif(.nMTDHoursWorked >= ;
 	round(lnSchedHrsOfService*this.nFullMonthServicePCT,0),1,0) 
 
 return lnFullMonthOfService
@@ -812,6 +985,13 @@ addproperty(loR, "dLYEndDt", {})
 *** Effective Date 
 addproperty(loR, "dEffDt", {})
 
+*** Pay Calendar  
+addproperty(loR, "cPayGRP", "")
+addproperty(loR, "dPayPeriodStartDt", {})
+addproperty(loR, "dPayPeriodEndDt", {})
+addproperty(loR, "cPayCycle", "")
+addproperty(loR, "IsThe2ndPay", .f.)
+
 *** Month To Date (MTD)
 *** Entitlement calculation 
 addproperty(loR, "nMTDSchedToWork", 0)
@@ -820,6 +1000,8 @@ addproperty(loR, "nTotHoursWorked", 0)
 addproperty(loR, "nTotDaysWorked", 0)
 addproperty(loR, "nMAXDaysWorked", 0)
 addproperty(loR, "nFullMonthOfService", 0)
+addproperty(loR, "nRECAPMCP_DPY", 0)
+addproperty(loR, "dOriginalHiredDt", {})
 
 *** Schedule average hours/day 
 addproperty(loR, "nHRSPDY", 0)
@@ -844,6 +1026,10 @@ addproperty(loR, "dTSEndDt", {})
 addproperty(loR, "cTSTCNT", "")
 addproperty(loR, "nTSWorkedDays", 0)
 addproperty(loR, "nTSWorkedHH", 0)
+
+*** Plan MIN & MAX
+addproperty(loR, "nPlanBalMin", 0)
+addproperty(loR, "nPlanBalMax", 0)
 
 *** Year To Date deposit 
 addproperty(loR, "nYTDBankDeposit", 0)

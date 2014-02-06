@@ -66,6 +66,10 @@ nAPMCP_DAYSWKPERYEAR = 248.6		&& APMCP maximum yearly working days
 nWorkDaysYear = 0.0 					&& How many working days in a year 
 cVacBankCursor = ""					&& Place holder for TVac cursor 
 
+nSEB_UNION_LEAVE_DAYS=30			&& Union leave SEB 
+nAPMCP_UNION_LEAVE_DAYS=25			&& Union leave APMCP
+nSEB_FLEX_HOURS=6.5					&& Flex SEB 
+
 cLogStatus 	= "startlog.txt" 		&& start logging 
 cLogPath = "\TEMP\" 					&& log folder 
 _DEBUG = .T.							&& set .T. for debugging 
@@ -113,7 +117,7 @@ procedure GetVacBankObject(tnSenMths)
 local loRS
 store null to loRS 
 
-if !used("qAPLAN") 
+if !used("qAPLAN") and !used("qAPLAN104")
 	this.WriteLog("GetVacBankObject() - qAPLAN not opened!")
 	return loRS 
 endif 
@@ -123,6 +127,12 @@ if empty(tnSenMths)
 	this.WriteLog("GetVacBankObject() - tnSenMths = " + ;
 						transform(tnSenMths) )
 	return loRS 
+endif 
+
+if !used("qAPLAN") and used("qAPLAN104")
+	select * from qAPLAN104 ;
+	into cursor qAPLAN
+	go top in qAPLAN
 endif 
 
 *** Create a Sick bank object 
@@ -208,6 +218,20 @@ endif
 
 *** Get the counter
 .cTCNT = trim(qAPLAN.AP_YTCNT)
+
+*** Get MAX & MIN of the plan 
+if val(qAPLAN.AP_BALMIN) != 0 ;
+or empty(qAPLAN.AP_BALMIN)
+	.nPlanBalMin = val(qAPLAN.AP_BALMIN)
+else 
+	.nPlanBalMin = evaluate(qAPLAN.AP_BALMIN)
+endif 	
+if val(qAPLAN.AP_BALMAX) != 0 ;
+or empty(qAPLAN.AP_BALMAX)
+	.nPlanBalMax = val(qAPLAN.AP_BALMAX)
+else 
+	.nPlanBalMax = evaluate(qAPLAN.AP_BALMAX)
+endif 	
 
 *** Get the bank unit HOURS or DAYS 
 .cBankUnit = trim(tbleval("TIMEBANK", .cBankId, "TBLC1"))
@@ -677,6 +701,66 @@ return
 endproc
 
 *=========================================================
+#define GET_UNION_LEAVE
+*=========================================================
+protected procedure GetVacationDays_SYNSEB()
+*** Gets the current year's union leave paid 
+* number of days, to which an employee that belongs 
+* to a union is entitled.
+*
+if this.nSEB_UNION_LEAVE_DAYS <= 0 
+	this.WriteLog("GetVacationDays_SYNSEB() - " + ;
+			"nSEB_UNION_LEAVE_DAYS = " + ;
+			transform(this.nSEB_UNION_LEAVE_DAYS))
+	return 
+endif 	
+
+.nTotVacDays = this.nSEB_UNION_LEAVE_DAYS
+.nTotVacHH = this.ConvertTimeBankUnit(.nTotVacDays)
+
+return
+endproc
+
+*=========================================================
+protected procedure GetVacationDays_SYNAPMCP()
+*** Gets the current year's union leave paid 
+* number of days, to which an employee that belongs 
+* to a union is entitled.
+*
+if this.nAPMCP_UNION_LEAVE_DAYS <= 0 
+	this.WriteLog("GetVacationDays_SYNAPMCP() - " + ;
+			"nAPMCP_UNION_LEAVE_DAYS = " + ;
+			transform(this.nAPMCP_UNION_LEAVE_DAYS))
+	return 
+endif 	
+
+.nTotVacDays = this.nAPMCP_UNION_LEAVE_DAYS
+.nTotVacHH = this.ConvertTimeBankUnit(.nTotVacDays)
+
+return
+endproc
+
+*=========================================================
+#define GET_VACATION_FLEX
+*=========================================================
+protected procedure GetVacationDays_FLEX()
+*** Gets the current year's union leave paid 
+* number of days, to which an employee that belongs 
+* to a union is entitled.
+*
+if this.nSEB_FLEX_HOURS <= 0 
+	this.WriteLog("GetVacationDays_FLEX() - " + ;
+			"nSEB_FLEX_HOURS = " + ;
+			transform(this.nSEB_FLEX_HOURS))
+	return 
+endif 	
+
+.nTotVacDays = 1
+.nTotVacHH = this.nSEB_FLEX_HOURS
+
+return 
+
+*=========================================================
 #define BUILD_VACATION_TABLES
 *=========================================================
 protected procedure GetVacationTableCursor()
@@ -802,8 +886,8 @@ if this._DEBUG
 	select TVac 
 	go top in TVac
 	lcFile = this.cLogPath + trim(.cPlanId) + ;
-			lower(trim(alias()))+ sys(2015) + ".xls" 
-	copy to (lcFile) type xls 
+			lower(trim(alias()))+ "_"+sys(2015)+ ".dbf" 
+	copy to (lcFile)
 	go top in TVac
 endif 
 	
@@ -1259,6 +1343,10 @@ addproperty(loR, "dTSEndDt", {})
 addproperty(loR, "cTSTCNT", "")
 addproperty(loR, "nTSWorkedDays", 0)
 addproperty(loR, "nTSWorkedHH", 0)
+
+*** Plan MIN & MAX
+addproperty(loR, "nPlanBalMin", 0)
+addproperty(loR, "nPlanBalMax", 0)
 
 **** ERROR Handler 
 addproperty(loR, "cERROR", "")
