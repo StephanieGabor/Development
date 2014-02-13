@@ -41,6 +41,11 @@
 *							: two sick banks need to run the 
 *							: entitlement in parallel.
 *
+*  Modification      : Stefan - 2014/02/12 --- SFPQ  
+*							: Extra rounding time needed at the  
+*							: begining of the shift, ex. time 
+*							: required to boot up the computer.
+*
 *#########################################################
  define class bizTIMETMP1_Custom ;
  					as bizTIMETMP1 of bizTIMETMP1.PRG
@@ -58,17 +63,17 @@ nRndUpLunchEndMM = 0 						&& Before lunch ends round up
 nRndDownLunchEndMM = 0	 					&& After lunch ends round down 
 nRndUpShiftEndMM = 0			 				&& Before the shift ends round up 
 nRndDownShiftEndMM = 0	 					&& After the shift ends round down  
-nRndDownShiftLatencyMM = 0		 			&& Shift latency round down  
-
+nRndDownShiftStartLatencyMM = 0			&& Shift latency round down  
 
 cBANK_REALTIME_ENTITLEMENT="1,2,5,7"	&& Banks real time entitlement  
+cVIRTUAL_BANK_DEPOSIT = "1"				&& Banks real time entitlement  
+cDepositSurplusIntoBankids = "9"
 
 cLogStatus = "startlog.txt" 				&& triggers for start logging 
 cLogPath = "\TEMP\" 							&& log folder 
 _DEBUG = .T.									&& set .T. for debugging 
 
 nRoundInOutTo = 0                   	&& default rounding  
-
 
 *=========================================================
 #define SCHEDULE_ROUNDING_SCHEMA_HOTFIX
@@ -119,7 +124,7 @@ return llReturn
 
 *=========================================================
 procedure AnalyseInOut_AdjustStartShift(tlShiftStartUp, ;
-		tlShiftStartDown)
+		tlShiftStartDown, tlShiftStartDownLatency)
 *** Adjust the start of the shift UP & DOWN 
 local lnStartOfShiftHM, lnSchedStartOfShiftHM
 local lcStartOfShiftHM
@@ -127,7 +132,8 @@ local lcStartOfShiftHM
 store "" to lcStartOfShiftHM
 store 0 to lnStartOfShiftHM, lnSchedStartOfShiftHM
 
-if !tlShiftStartUp and !tlShiftStartDown
+if !tlShiftStartUp ;
+and !tlShiftStartDown and !tlShiftStartDownLatency 
 	return 
 endif 	
 
@@ -157,7 +163,7 @@ endif
 
 
 *** Adjust the start of shift time DOWN to the schedule 
-if tlShiftStartDown 
+if (tlShiftStartDown or tlShiftStartDownLatency)
 	*** if on schedule .UsedHM is empty 
 	lcStartOfShiftHM = left(.UsedHM,4)
 	lnStartOfShiftHM = HMtoM(alltrim(lcStartOfShiftHM))
@@ -165,7 +171,9 @@ if tlShiftStartDown
 
 	*** Round the shift start DOWN to the shedule 
 	if lnStartOfShiftHM > lnSchedStartOfShiftHM ;
-	and castx(lnStartOfShiftHM-lnSchedStartOfShiftHM, "N")<=this.nRndDownShiftStartMM
+	and castx(lnStartOfShiftHM-lnSchedStartOfShiftHM, "N") <= ;
+		this.nRndDownShiftStartMM+this.nRndDownShiftStartLatencyMM 
+		
 		.UsedHM = stuff(.UsedHM, 1, 4, loSched.StartHM)
 	endif 
 
@@ -181,7 +189,6 @@ if tlShiftStartDown
 endif 
 
 return 
-
 
 *=========================================================
 procedure AnalyseInOut_AdjustEndShift(tlShiftEndUp, ;
@@ -470,7 +477,8 @@ this.WriteLog("AnalyseInOut_Init() - " + ;
 		"nRndUpLunchEndMM = "+transform(.nRndUpLunchEndMM)+CRLF+;
 		"nRndDownLunchEndMM = "+transform(.nRndDownLunchEndMM)+CRLF+;
 		"nRndUpShiftEndMM = "+transform(.nRndUpShiftEndMM)+CRLF+;
-		"nRndDownShiftEndMM = "+transform(.nRndDownShiftEndMM))
+		"nRndDownShiftEndMM = "+transform(.nRndDownShiftEndMM)+CRLF+;
+		"nRndDownShiftStartLatencyMM = "+transform(.nRndDownShiftStartLatencyMM))
 
 endwith 
 
@@ -487,7 +495,7 @@ local llShiftStartUp, llShiftStartDown
 local llShiftEndUp, llShiftEndDown
 local llLunchStartUp, llLunchStartDown  
 local llLunchEndUp, llLunchEndDown 
-local lnLunchBreak 
+local lnLunchBreak
 
 store 0 to lnLunchBreak 
 
@@ -503,6 +511,9 @@ this.AnalyseInOut_Init()
 llShiftStartUp = (this.nRndUpShiftStartMM > 0)
 llShiftStartDown = (this.nRndDownShiftStartMM > 0)
 
+*** start of shift latency 
+tlShiftStartDownLatency=(this.nRndDownShiftStartLatencyMM>0)
+
 *** end of shift 
 llShiftEndUp = (this.nRndUpShiftEndMM > 0)
 llShiftEndDown = (this.nRndDownShiftEndMM> 0)
@@ -516,7 +527,8 @@ llLunchEndUp = (this.nRndUpLunchEndMM > 0)
 llLunchEndDown = (this.nRndDownLunchEndMM > 0)
 
 *** Handle shift (start and end) rounding 
-this.AnalyseInOut_AdjustStartShift(llShiftStartUp,llShiftStartDown)
+this.AnalyseInOut_AdjustStartShift(llShiftStartUp, ;
+		llShiftStartDown, tlShiftStartDownLatency)
 this.AnalyseInOut_AdjustEndShift(llShiftEndUp,llShiftEndDown)
 
 *** Start adjusting the lunch time 
@@ -780,8 +792,25 @@ for lnJ = 1 to alen(laSickBank,1)
 		endif 
 
 		Insert Into vTimedt488 From Memvar
+
+		*** Deposit into virtual bank 
+		if lnJ = val(this.cVIRTUAL_BANK_DEPOSIT) ;
+		and !loSickParm.IsThe2ndPay
+
+			lnHoursOffBy = loSickParm.nTSWorkedHH - ;
+						loSickParm.nSchedHoursWKByPayPeriod
+
+			.WriteLog("Postbatch_Deposits()-lnHoursOffBy="+;
+				transform(lnHoursOffBy))
+			
+			if lnHoursOffBy != 0 
+				this.DepositIntoVirtualBank(lnHoursOffBy)
+				store 0 to lnHoursOffBy
+			endif 	
+		endif 
 	endif 	
-		
+
+	*** set step on 
 	store null to loSickParm
 next 
 
@@ -913,6 +942,41 @@ this.WriteLog("GetEmployeeSICKBanks() - " + ;
 select(lnSelect)
 return tcBankSet
 
+*======================================================================
+procedure DepositIntoVirtualBank (tnNumOfHours)
+*** Deposit the number of hours that are off 
+* in terms of employee's schedule into a virtual bank.
+* These hours are withdraw on the 2nd pay run 
+*
+local lnOk, lcSets, lcWhere, lnNumOfHours 
+local lcBankId, lcVirtualBankId, lnVirtualHRS  
+
+store "" to lcSets, lcWhere
+store "" to lcBankId, lcVirtualBankId
+store 0 to lnVirtualAMT 
+
+if empty(tnNumOfHours)
+	return 
+endif 	
+
+**** set step on 
+lcBankId = this.cDepositSurplusIntoBankids
+lcVirtualBankId = "V" + qJobhist.H_APLAN&lcBankId
+
+lnVirtualHRS = val(tbleval("MISCBANK",lcVirtualBankId,"TBLC7"))
+lnVirtualHRS = lnVirtualHRS + tnNumOfHours 
+
+*** debug 
+this.WriteLog("DepositIntoVirtualBank() = " + ;
+		"lnVirtualHRS = "+transform(lnVirtualHRS))
+
+lcSets = "TBLC7=" + lstr(lnVirtualHRS,2)+",TBLC6=''"
+lcWhere = "TBLTYPE='MISCBANK' AND TBLID='" + ;
+		alltrim(lcVirtualBankId) + "'"
+
+lnOk = goDataMgr.UpdateSQL("TBL", lcWhere, lcSets)
+return 
+
 *=========================================================
 procedure AnalyseInOut
 parameters pcSwitches,pnPersid,pdIn,pcInout,poJobhist
@@ -1006,6 +1070,10 @@ addproperty(loR, "nRndUpShiftEndMM", 0)
 addproperty(loR, "nRndDownShiftEndMM", 0)
 
 return loR
+
+*==========================================================
+protected procedure GetTimeBankCollectionObject()
+return this.oBankColl
 
 *=========================================================
 procedure SpoolObjectProperties(toR As Object)

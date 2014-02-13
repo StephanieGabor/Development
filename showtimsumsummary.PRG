@@ -147,7 +147,6 @@ if !empty(lcTimetmpAlias) or llTimetmp
 				lcTimetmpAlias, "qTimsum77")
 endif
 
-
 lcDaysAbbrev = goMsgMgr.GetText("UI.COMMON.UNITS.DAYS_SHORT")
 lcHoursAbbrev = goMsgMgr.GetText("UI.COMMON.UNITS.HOURS_SHORT")
 lcCurrency = goMsgMgr.GetText("UI.COMMON.CURRENCY_SYMBOL")
@@ -157,6 +156,7 @@ lnHrsPdy = hrspdy(lnPERSID, date(), .t.)
 *** Show planned absences starting on this date
 ldPlannedFrom = monday(date(), C_WEEKSTRT) - 7
 
+*** set step on 
 *** In this program. Creates relation qTimsum77 -> qPlan77
 if llTimetmp
 	if ShowTimsumSummary_GetPlannedAbs()
@@ -170,6 +170,8 @@ scan
 	replace ;
 			BankName with tbleval("TIMEBANK", TS_BANKID), ;
 			PlanName with tbleval("APLAN", TS_PLANID)
+
+	replace TS_Earn with TS_Earn + ExtractFromVirtualBank(TS_PlanId) 
 
 	replace CarryTxt with ConvertTimsumUnits( ;
 				"", TS_Units, TS_Carry, TS_CarryD, lnHrsPdy)
@@ -453,4 +455,25 @@ endif
 return
 
 *=========================================================
+procedure ExtractFromVirtualBank(tcPlanId)
+*** Get the number of hours from the virtual bank
+*
+local lcVirtualBankId, lnVirtualHRS  
+
+store "" to lcVirtualBankId
+store 0 to lnVirtualAMT 
+
+if empty(tcPlanId)
+	return 
+endif 	
+
+lcVirtualBankId = "V" + alltrim(tcPlanId)
+
+*** Get signed only transaction 
+lnVirtualHRS = val(tbleval("MISCBANK",lcVirtualBankId,"TBLC6"))
+
+*** Get posted transaction 
+lnVirtualHRS = lnVirtualHRS + ;
+			val(tbleval("MISCBANK",lcVirtualBankId,"TBLC7"))
+return lnVirtualHRS 
 

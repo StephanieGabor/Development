@@ -37,6 +37,8 @@ cOptType = ""
 oBankHours = null
 cSchedId = ""
 cKilometerYTD = ""
+cPayCycle = ""
+IsThe2ndPay = .f.
 
 *** Calendar 
 lUseSidebar = .t.
@@ -54,6 +56,8 @@ cBank6DepositOpt = ""
 cBank9DepositOpt = ""
 
 lShowPlanNames = .T. 
+lShowDeficitDialogForSingleBank = .f.
+lShowSurplusDialogForSingleBank = .f. 
 
 *-- Time BANKIDs can withdraw deficit from
 cWithdrawDeficitFromBankids = "1359"		&& Bankids.  E.g. "13"
@@ -1069,68 +1073,38 @@ endif
 
 with this 
 
-if (atw("ATT",trim(qJobhist.H_SCHEDID))>0)
-	.cWithdrawDeficitFromBankids = "135"
-	.cBank1WithdrawalOpt = "MALATT"
-	.cBank3WithdrawalOpt = "VACATT"
-	.cBank5WithdrawalOpt = "MOBATT"
-	return 
-endif 
+.cWithdrawDeficitFromBankids= "9"
+.cDepositSurplusIntoBankids = "9"
+
+.cBank9DepositOpt = "DEP9"
 
 do case 
+*** H_JOBCAT = 'DIRCONTR'
+case "NONSYN"$trim(qJobhist.H_UNION) ;
+	and trim(qJobhist.H_JOBCAT) = "DIRCONTR"
+
+	.cBank9WithdrawalOpt = "CFLEXI"
+
+*** H_JOBCAT IN ('ELUEXECU','ELUREGIO')
+case "SFPQ"$trim(qJobhist.H_UNION) ;
+	and inlist(trim(qJobhist.H_JOBCAT),"ELUEXECU","ELUREGIO")
+
+	.cBank9WithdrawalOpt = "CFLEXI"
+
 *** SEB 
-case "SEB"$alltrim(qJobhist.H_UNION)
-	.cWithdrawDeficitFromBankids = "1359"
-	.cBank1WithdrawalOpt = "MALSEB10"
-	.cBank3WithdrawalOpt = "VACSEB10"
-	.cBank5WithdrawalOpt = "MOBSEB"
+case "SEB"$trim(qJobhist.H_UNION)
+
 	.cBank9WithdrawalOpt = "CFLEXI"
 
-	.cDepositSurplusIntoBankids = "69"
-	.cBank6DepositOpt = "DEP6"
-	.cBank9DepositOpt = "DEP9"
-*** GOUV 
-case inlist(alltrim(qJobhist.H_UNION),"APMCP","SFPQ");
-	and !empty(lnDifferential)
+*** APMCP 
+case "APMCP"$trim(qJobhist.H_UNION) 
 
-	.cWithdrawDeficitFromBankids = "123"
-	.cBank1WithdrawalOpt = "MALAPM5"
-	.cBank2WithdrawalOpt = "MALGOUV"
-	.cBank3WithdrawalOpt = "VACAPM10"
-*** APMCP
-case "APMCP"$alltrim(qJobhist.H_UNION) ;
-	and empty(lnDifferential)
-
-	.cWithdrawDeficitFromBankids = "1369"
-	.cBank1WithdrawalOpt = "MALAPM5"
-	.cBank3WithdrawalOpt = "VACAPM10"
-	.cBank6WithdrawalOpt = "CRECUP"
-
-	.cDepositSurplusIntoBankids = "9"
-	.cBank6DepositOpt = "DEP6"
-*** NONSYN
-case "NONSYN"$alltrim(qJobhist.H_UNION)
-	.cWithdrawDeficitFromBankids = "9"
 	.cBank9WithdrawalOpt = "CFLEXI"
 
-	.cDepositSurplusIntoBankids = "9"
-	.cBank9DepositOpt = "DEP9"
 endcase 
 
-.WriteLog("InitBankWithdrawal() = " + CRLF +;
-		" cWithdrawDeficitFromBankids = " + ;
-			transform(.cWithdrawDeficitFromBankids)+CRLF+;
-		" cBank1WithdrawalOpt = " + ;
-			transform(.cBank1WithdrawalOpt)+CRLF+;
-		" cBank2WithdrawalOpt = " + ;
-			transform(.cBank2WithdrawalOpt)+CRLF+;
-		" cBank3WithdrawalOpt = " + ;
-			transform(.cBank3WithdrawalOpt)+CRLF+;
-		" cBank5WithdrawalOpt = " + ;
-			transform(.cBank5WithdrawalOpt)+CRLF+;
-		" cBank6WithdrawalOpt = " + ;
-			transform(.cBank6WithdrawalOpt)+CRLF+;
-		" cBank9WithdrawalOpt = " + ;
+.WriteLog("InitBankWithdrawal() = " + ;
+		"cBank9WithdrawalOpt = " + ;
 			transform(.cBank9WithdrawalOpt))
 
 endwith 
@@ -1204,6 +1178,111 @@ return
 endproc
 
 *======================================================================
+procedure GetPayPeriodCycle(tdStartDt)
+***
+local lnSelect, loBizPayno, lcPayno, lcPayCycle
+store "" to lcPayno, lcPayCycle
+store null to loBizPayno
+
+if empty(tdStartDt)
+	return 
+endif 
+	
+lnSelect = select()
+
+*** Get pay cycle property 
+loBizPayno = GetBiz("PAYNO")
+if isnull(loBizPayno)
+	return 
+endif 	
+
+*** Get the current payno
+lcPayno = trim(loBizPayno.GetCurrentPayno (;
+			qJobHist.H_PAYGRP, tdStartDt))
+
+*** Info about the pay period fron PAYNO
+lcPayCycle = loBizPayno.GetValueById( ;
+					lcPayNo, "PN_CYCLE")
+
+this.cPayCycle = alltrim(lcPayCycle)
+this.IsThe2ndPay = (atw("2",this.cPayCycle)>0)
+
+this.WriteLog("GetPayPeriodCycle() = " + ;
+		"cPayCycle, IsThe2ndPay = "+transform(this.cPayCycle)+;
+		",  " + transform(this.IsThe2ndPay))
+
+store null to loBizPayno
+select(lnSelect)
+
+return 
+
+*======================================================================
+procedure DepositIntoVirtualBank (tnNumOfHours)
+*** Deposit the number of hours that are off 
+* in terms of employee's schedule into a virtual bank.
+* These hours are withdraw on the 2nd pay run 
+*
+local lnOk, lcSets, lcWhere, lnNumOfHours 
+local lcBankId, lcVirtualBankId, lnVirtualHRS  
+
+store "" to lcSets, lcWhere
+store "" to lcBankId, lcVirtualBankId
+store 0 to lnVirtualAMT 
+
+if empty(tnNumOfHours) ;
+or empty(this.cDepositSurplusIntoBankids)
+	return 
+endif 	
+
+lcBankId = this.cDepositSurplusIntoBankids
+lcVirtualBankId = "V" + qJobhist.H_APLAN&lcBankId
+
+lnVirtualHRS = tnNumOfHours 
+
+*** debug 
+this.WriteLog("DepositIntoVirtualBank() = " + ;
+		"lnVirtualHRS = "+transform(lnVirtualHRS))
+
+lcSets = "TBLC6='" + lstr(lnVirtualHRS,2) + "'"
+lcWhere = "TBLTYPE='MISCBANK' AND TBLID='" + ;
+		alltrim(lcVirtualBankId) + "'"
+
+lnOk = goDataMgr.UpdateSQL("TBL", lcWhere, lcSets)
+return lnVirtualHRS 
+
+*======================================================================
+procedure WithdrawFromVirtualBank()
+*** Withdraw the number of hours from the virtual bank
+* and clear out the balance.
+*
+local lnOk, lcSets, lcWhere, lnNumOfHours 
+local lcBankId, lcVirtualBankId, lnVirtualHRS  
+
+store "" to lcSets, lcWhere
+store "" to lcBankId, lcVirtualBankId
+store 0 to lnVirtualAMT 
+
+if empty(this.cDepositSurplusIntoBankids)
+	return 
+endif 	
+
+lcBankId = this.cDepositSurplusIntoBankids
+lcVirtualBankId = "V" + qJobhist.H_APLAN&lcBankId
+
+lnVirtualHRS = val(tbleval("MISCBANK",lcVirtualBankId,"TBLC7"))
+
+*** debug 
+this.WriteLog("WithdrawFromVirtualBank() = " + ;
+		"lnVirtualHRS = "+transform(lnVirtualHRS))
+
+lcSets = "TBLC7=''"
+lcWhere = "TBLTYPE='MISCBANK' AND TBLID='" + ;
+		alltrim(lcVirtualBankId) + "'"
+
+lnOk = goDataMgr.UpdateSQL("TBL", lcWhere, lcSets)
+return lnVirtualHRS 
+
+*======================================================================
 procedure cmdLog_GetLogFile( poThis, pnLogIndex)
 *** DEBUG procedure 
 local lcLogFileName 
@@ -1261,9 +1340,163 @@ endif
 
 return
 
-
 *======================================================================
 #define HOT_FIXES 
+*=========================================================
+procedure cmdSign_Valid (poThis)
+*** Handles the SIGN button on Page 1
+if dodefault(poThis)
+
+endif 
+
+return 
+*======================================================================
+procedure ValidateSheet(llSigning)
+***
+local ldFrom 
+ldFrom = ToDate(this.dFromDt)
+this.GetPayPeriodCycle(ldFrom)
+
+return dodefault(llSigning)
+
+*======================================================================
+procedure ValidateSheet_HourSurplus(lnRegHrs)
+*** Employee has worked too many regular hours this week.
+*   Offer to deposit in time bank.
+private lnBankid, lcBankid, lnR, lcR, lnRows
+private llOK, lnMargin, lcMargin, lcOpt, lnSurplus, lnDefault
+private lcBankid1, lcBankid2, lcBankid3
+private lcForClause
+private all like lcBankname*
+private all like lcBankInfo*
+private all like lcHHMM*
+private all like lnHours*
+private all like lnMargin*
+private lcMessage, lcLeft, lnLeft, loThisform
+
+store null to loThisform
+
+for lnN = 1 to 9
+	lcN = str(lnN,1)
+	store 999999 to ("lnMargin"+lcN)
+	store 0 to ("lnHours"+lcN)
+	store "" to ("lcHHMM"+lcN), ("lcBankid"+lcN), ("lcBankName"+lcN)
+	store "" to ("lcBankInfo"+lcN)
+endfor
+
+lnRows = 0
+
+lnSurplus = This.ValidateSheet_GetHourSurplus(lnRegHrs)
+
+*** set step on 
+if !this.IsThe2ndPay
+	this.DepositIntoVirtualBank (lnSurplus)
+	return 
+endif 	
+
+*** Withdraw from the virtual bank 
+lnSurplus = lnSurplus + this.WithdrawFromVirtualBank()
+
+lnLeft = lnSurplus
+lcLeft = HtoHM(lnLeft, 3, "/DELIM")
+if this.lShowBanksInReverseOrder
+	lcForClause = "9 to 1 step -1"
+else
+	lcForClause = "1 to 9"
+endif
+
+for lnBankid = &lcForClause
+	lcBankid = str(lnBankid,1)
+	if !lcBankid $ this.cDepositSurplusIntoBankids
+		*** Not a valid bank for overtime depositing
+		loop
+	endif
+	if empty(qJobhist.H_APLAN&lcBankid)
+		*** Employee doesn't have this bank
+		loop
+	endif
+
+	*** Found one.  Check current balance and max.
+	select qTimsum
+	locate for TS_BANKID = lcBankid
+	if !found()
+		*** Strange
+		loop
+	endif
+
+	*** How much more can the bank accept?
+	lnMargin = this.ValidateSheet_GetMargin()	
+	
+	if lnMargin <= 0
+		*** Already full
+		loop
+	endif
+
+	*** Prepare to add a row to the subform
+	lnRows = lnRows + 1
+	lcR = str(lnRows,1)
+	lcBankid&lcR = lcBankid
+	lcBankname&lcR = iif(this.lShowPlanNames, ;
+				tbleval("APLAN", qJobhist.H_APLAN&lcbankid), ;
+				tbleval("TIMEBANK", lcBankid))
+	store min(lnMargin, lnSurplus) to ("lnMargin"+lcR)
+	if lnMargin < lnSurplus
+		lcMargin = longtime(lnMargin)
+		lcBankinfo&lcR = iif(gcLang = "E", ;
+					"You can deposit up to " + lcMargin + " here", ;
+					"Vouz pouvez déposer jusqu'à " + lcMargin + " ici")
+	else
+		lcBankinfo&lcR = iif(gcLang = "E", ;
+					"You can deposit time here", ;
+					"Vous pouvez déposer du temps ici")
+	endif
+
+	*** Preload with default amount
+	lnDefault = min(lnLeft, lnMargin)
+	store lnDefault to ("lnHours"+lcR)
+	store HtoHM(lnDefault,3, "/DELIM") to ("lcHHMM"+lcR)
+	lnLeft = lnLeft - lnDefault
+
+endfor
+lcLeft = HtoHM(lnLeft, 3, "/DELIM")
+
+if lnRows = 0
+	*** No bank deposits possible
+	if gcLang = "E"
+		alert("You have entered " + longtime(lnRegHrs) + ;
+			  " in regular time,;which is more than the maxmum allowed of " + ;
+			  longtime(this.nMaxRegHoursWeek), ;
+			  0, "\!\?\<OK", "/LEFT")
+	else
+		alert("Vous avez saisi " + longtime(lnRegHrs) + ;
+			  " de temps régulier,;qui dépasse votre maximum permis de " + ;
+			  longtime(this.nMaxRegHoursWeek), ;
+			  0, "\!\?\<OK", "/LEFT")
+	endif
+	select vTimetmp
+	return .f.
+endif
+
+if gcLang = "E"
+	lcMessage = "You have entered " + longtime(lnRegHrs) + ;
+			  " of regular time, which is over the maximum allowed of " + ;
+			  longtime(this.nMaxRegHoursWeek) + ;
+			  ". Where would you like to put this suplus?"
+else
+	lcMessage = "Vous avez saisi " + longtime(lnRegHrs) + ;
+			  " de temps régulier, qui dépasse votre maximum permis de " + ;
+			  longtime(this.nMaxRegHoursWeek) + ;
+			  ". Où voulez-vous mettre le surplus ?"
+endif
+
+if !this.ValidateSheet_HourSurplus_CreateDeposits()
+	select vTimetmp
+	return .f.
+endif
+
+select vTimetmp
+return
+
 *======================================================================
 procedure ValidateSheet_HourDeficit(lnRegHrs)
 *** Employee has not worked enough hours this week.
@@ -1292,6 +1525,17 @@ endfor
 
 lnWeeks = int(this.nDaysPer / 7)
 
+*** Determine which banks he can withdraw from
+lnRows = 0
+
+lnDeficit = this.nMinRegHoursWeek - lnRegHrs
+
+*** set step on 
+if !this.IsThe2ndPay
+	this.DepositIntoVirtualBank (lnDeficit)
+	return 
+endif 	
+
 if !this.lRequireMinHours
 	if gcLang = "E"
 		lnReply = alert("You have only entered " + longtime(lnRegHrs) + ;
@@ -1318,9 +1562,9 @@ if !this.lRequireMinHours
 	endif
 endif
 
-*** Determine which banks he can withdraw from
-lnRows = 0
-lnDeficit = this.nMinRegHoursWeek - lnRegHrs
+*** Withdraw from the virtual bank 
+lnDeficit = lnDeficit + this.WithdrawFromVirtualBank()
+
 lntake = lndeficit
 lctake = HtoHM(lntake, 3, "/DELIM")
 
@@ -1349,7 +1593,6 @@ for lnBankid = &lcForClause
 		loop
 	endif
 
-	*** Stefan change 
 	*** set step on 
 	lnMargin = iif(lcBankid$this.cBanksToValidate,TS_NEWBAL,999999)
 	if lnMargin <= TS_MIN
@@ -1415,16 +1658,7 @@ else
 			  ". Comment combler cette difference ?"
 endif
 
-llOK = DoModalForm("Timetmp1Deficit", "", this)
-if !nvl(llOK, .f.)
-	select vTimetmp
-	return .f.
-endif
-
-waitwind()
-
 select vTimetmp
-
 if !this.ValidateSheet_HourDeficit_Validate()
 	select vTimetmp
 	return .f.

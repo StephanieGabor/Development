@@ -156,9 +156,11 @@ endproc
 protected procedure SetSickBankProperty(tnSenMths)
 *** Populate the objects' constants 
 *
-local loBizSched, ldSeniorField 
+local loBizSched, ldSeniorField, lcMAXBalance, lcMINBalance
 local llMonthlyCalc, llYearlyCalc
+
 store null to loBizSched
+store "" to lcMAXBalance, lcMINBalance
 
 *** ID's 
 if empty(.nPersId) and type("lnPersId") = "N"
@@ -265,14 +267,33 @@ if val(qAPLAN.AP_BALMIN) != 0 ;
 or empty(qAPLAN.AP_BALMIN)
 	.nPlanBalMin = val(qAPLAN.AP_BALMIN)
 else 
-	.nPlanBalMin = evaluate(qAPLAN.AP_BALMIN)
+	lcMINBalance = trim(qAPLAN.AP_BALMIN)
+
+	do case 
+	case used("qJobhist") 
+		lcMINBalance = strtran(upper(lcMINBalance),"JOBHIST","qJobhist")
+	case used("vJobhist")
+		lcMINBalance = strtran(upper(lcMINBalance),"JOBHIST","vJobhist")
+	endcase 
+
+	.nPlanBalMin = evaluate(lcMINBalance)
 endif 	
+
 if val(qAPLAN.AP_BALMAX) != 0 ;
 or empty(qAPLAN.AP_BALMAX)
 	.nPlanBalMax = val(qAPLAN.AP_BALMAX)
 else 
-	.nPlanBalMax = evaluate(qAPLAN.AP_BALMAX)
-endif 	
+	lcMAXBalance = trim(qAPLAN.AP_BALMAX)
+
+	do case 
+	case used("qJobhist") 
+		lcMAXBalance = strtran(upper(lcMAXBalance),"JOBHIST","qJobhist")
+	case used("vJobhist")
+		lcMAXBalance = strtran(upper(lcMAXBalance),"JOBHIST","vJobhist")
+	endcase 
+	
+	.nPlanBalMax = evaluate(lcMAXBalance)
+endif 
 
 *** Get the bank unit HOURS or DAYS 
 .cBankUnit = trim(tbleval("TIMEBANK", .cBankId, "TBLC1"))
@@ -303,10 +324,9 @@ procedure GetPayPeriod()
 *  
 local loBizPayno, loBizTimeDt
 local lcPayNo, lcLastPayNo
-local lcPayCycle
 
 store null to loBizPayno, loBizTimeDt
-store "" to lcPayGRP, lcPayNo, lcLastPayNo, lcPayCycle
+store "" to lcPayGRP, lcPayNo, lcLastPayNo
 
 loBizPayno = GetBiz("PAYNO")
 loBizTimeDt = GetBiz("TIMEDT")
@@ -521,6 +541,25 @@ store null to loBizTimeDt
 return
 
 *=========================================================
+protected procedure GetScheduleToWorkByPayPeriod()
+*** Get how many days the employee is scheduled 
+* to work in this pay period 
+*
+if !empty(.dTSStartDt) and !empty(.dTSEndDt)
+	*** Scheduled to work by pay period 
+	.nSchedDaysWkByPayPeriod = TimeWorked("DAYS", ;
+			.nPersId, .dTSStartDt, .dTSEndDt)
+	.nSchedHoursWkByPayPeriod = TimeWorked("HOURS", ;
+			.nPersId, .dTSStartDt, .dTSEndDt)
+
+	.nRegularBankDeposit = ;
+		(this.nMALSEB_SICKDAYSPERYEAR/this.nSEB_DAYSWKPERYEAR)*;
+		.nSchedHoursWkByPayPeriod
+endif 
+
+return 
+
+*=========================================================
 #define GET_SICK_DAYS_BY_PLAN 
 *=========================================================
 protected procedure GetSickDays_MALSEB()
@@ -553,6 +592,9 @@ if .nTotDaysWorked > this.nSEB_DAYSWKPERYEAR
 	.nTotDaysWorked = .nMAXDaysWorked 
 endif 	
 
+*** Add scheduled hours to work by pay period 
+this.GetScheduleToWorkByPayPeriod()
+
 *** 10 sick days / 260 days per year 
 .nYTDSickDays=(this.nMALSEB_SICKDAYSPERYEAR/this.nSEB_DAYSWKPERYEAR)*;
 			.nTotDaysWorked 
@@ -560,6 +602,12 @@ endif
 *** Sum up the totals  
 .nTotSickDays = .nYTDSickDays
 .nTotSickHH = this.ConvertTimeBankUnit(.nTotSickDays)
+
+*** Do not allow more than maximum 
+if .nTotSickHH > .nRegularBankDeposit
+	.nCalculatedBankDeposit = .nTotSickHH 
+	.nTotSickHH = .nRegularBankDeposit
+endif 	
 
 *** Entitlement Year Yo Date - real time 
 .nEntitleHH = (.nTotSickHH - .nYTDBankDeposit)
@@ -1005,6 +1053,10 @@ addproperty(loR, "dOriginalHiredDt", {})
 
 *** Schedule average hours/day 
 addproperty(loR, "nHRSPDY", 0)
+addproperty(loR, "nSchedDaysWkByPayPeriod", 0)
+addproperty(loR, "nSchedHoursWkByPayPeriod", 0)
+addproperty(loR, "nRegularBankDeposit", 0)
+addproperty(loR, "nCalculatedBankDeposit", 0)
 
 *** Bank unit 
 addproperty(loR, "cBankUnit", "")
