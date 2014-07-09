@@ -1,3 +1,4 @@
+*=================================================================================
 *  Program...........: CVacationBank.PRG
 *  Author............: Stefan Gabor 
 *  Project...........: Carver Human Resources Zoo62
@@ -52,6 +53,13 @@
 *							: 		Get the YTD (Year To Date) entitlement of number 
 *							:		of vacation days from the vacation matrix (table TVac). 
 *                    :
+*                    :
+*                    :
+*                    : Banks In (3, 4, 8)
+*                    :
+*                    :
+*
+*=================================================================================
 *
 *#########################################################
 define class CVacationBank as custom 
@@ -73,6 +81,7 @@ nSEB_FLEX_HOURS=6.5					&& Flex SEB
 cLogStatus 	= "startlog.txt" 		&& start logging 
 cLogPath = "\TEMP\" 					&& log folder 
 _DEBUG = .T.							&& set .T. for debugging 
+oRS = null								&& Object container 
 
 *=========================================================
 #define MAIN_ENTRY    
@@ -91,6 +100,7 @@ if type("toRS")!="O" or isnull(toRS)
 	return toRS 
 endif 
 
+this.oRS = toRS
 with toRS 
 	*** Get vacation days 
 	this.GetPRORATA()
@@ -154,7 +164,9 @@ protected procedure SetVacBankProperty(tnSenMths)
 *
 local loBizSched, ldSeniorField 
 local llMonthlyCalc, llYearlyCalc
-store null to loBizSched
+local loBizJobhist, loCsrJH
+
+store null to loBizSched, loBizJobhist, loCsrJH
 
 *** ID's 
 if empty(.nPersId) and type("lnPersId") = "N"
@@ -170,28 +182,37 @@ if empty(.cDepositOPT)
 	.cDepositOPT = trim(qAPLAN.AP_BANKID)
 endif 
 
+loBizJobhist = GetBiz("JOBHIST")
+if isnull(loBizJobhist)
+	return
+endif 
+
+*** Many issue with different JOBHIST aliases 
+* Get the latest instead ...  	
+loCsrJH = loBizJobhist.GetPersAndJobhistByPersidAndDate( ;
+			"/CURSOR=qqJH", "*", lnPersid, date())
+if isnull(loCsrJH)
+	return
+endif 
+
 *** Load union into object 
-if used("vJobhist") and empty(.cUnionId)
-	.cUnionId = trim(vJobhist.H_UNION)
-endif	
-if used("qJobhist") and empty(.cUnionId)
-	.cUnionId = trim(qJobhist.H_UNION)
+if empty(.cUnionId)
+	.cUnionId = trim(qqJH.H_UNION)
 endif	
 
 *** Load schedule id into object 
-if used("vJobhist") and empty(.cSchedId)
-	.cSchedId = trim(vJobhist.H_SCHEDID)
+if empty(.cSchedId)
+	.cSchedId = trim(qqJH.H_SCHEDID)
 endif 
-if used("qJobhist") and empty(.cSchedId)
-	.cSchedId = trim(qJobhist.H_SCHEDID)
+
+*** Load pay group into object 
+if empty(.cPayGRP)
+	.cPayGRP = trim(qqJH.H_PAYGRP)
 endif 
 
 *** Load jobhist effdt into object 
-if used("vJobhist") and empty(.dEffDt)
-	.dEffDt = vJobhist.H_EFFDT 
-endif 
-if used("qJobhist") and empty(.dEffDt)
-	.dEffDt = qJobhist.H_EFFDT 
+if empty(.dEffDt)
+	.dEffDt = qqJH.H_EFFDT 
 endif 
 
 .nSenMths = tnSenMths 
@@ -203,9 +224,12 @@ if !empty(qAPLAN.AP_SENDT)
 	ldSeniorField = strtran(ldSeniorField, "PERS", "vPERS")
 	ldSeniorField = evaluate(ldSeniorField)
 
-	.nGOVTSenYears = year(date())-year(ldSeniorField )
-	.nGOVTSenMths = .nGOVTSenYears*12 
+	.nGTSenYears = year(date())-year(ldSeniorField )
+	.nGTSenMths = .nGTSenYears*12 
 endif 
+
+*** Hired date 
+.dOriginalHiredDt = qqJH.E_ORIGHIRE 
 
 *** Current Year Entitlement 
 .dStartDt = qAPLAN.AP_EFFDT
@@ -246,10 +270,91 @@ endif
 .nHRSPDY = loBizSched.WkCal("AVHRSPDY", ;
 			.cSchedId, .dEffDt )
 
-store null to loBizSched
+*** Add pay calendar dates 
+this.GetPayPeriod()
+
+store null to loBizSched, loBizJobhist, loCsrJH
+use in select("qqJH")
 
 return 
 endproc
+
+*=========================================================
+procedure GetPayPeriod()
+*** The PIVOT query give the data on multiple lines, 
+* however, we need to have the data summarized by 
+* expense id and by PERSID. - S.G.
+*  
+local loBizPayno, loBizTimeDt
+local lcPayNo, lcLastPayNo
+
+store null to loBizPayno, loBizTimeDt
+store "" to lcPayGRP, lcPayNo, lcLastPayNo
+
+loBizPayno = GetBiz("PAYNO")
+loBizTimeDt = GetBiz("TIMEDT")
+
+lcPayNo = .cPayGRP + left(dtos(date()), 4) + "01"
+.dPayPeriodStartDt=loBizPayno.GetValueById(lcPayNo, "PN_STARTDT")
+
+lcLastPayNo = loBizPayno.GetLastPayNo(left(lcPayNo, 8), "/REG")
+.dPayPeriodEndDt=loBizPayno.GetValueById(lcLastPayNo, "PN_ENDDT")
+
+store null to loBizPayno, loBizTimeDt
+
+return 
+endproc
+
+*=========================================================
+protected procedure GetScheduleToWorkByPayPeriod
+lparameters tnVacUnitPerYear, tnDaysWorkPerYear
+*** Get how many days the employee is scheduled 
+* to work in this pay period 
+*
+local loBizJobhist, lnSchedHoliHours 
+store null to loBizJobhist
+store 0 to lnSchedHoliHours
+
+*** set step on 
+if empty(.dPayPeriodStartDt) or empty(.dPayPeriodEndDt)
+	return 
+endif 	
+
+if !empty(.dPayPeriodStartDt) and !empty(.dPayPeriodEndDt)
+	*** Scheduled to work by pay period 
+	loBizJobhist = GetBiz("JOBHIST")
+	if isnull(loBizJobhist)
+		return 
+	endif 
+
+	.nSchedHoursWkByPayPeriod = loBizJobhist.GetTotalHours( ;
+			"/HOURS/INCLINAC/INCLLTD/INCLALD", ;
+			.nPersId, .dPayPeriodStartDt, .dPayPeriodEndDt)	
+
+	lnSchedHoliHours = loBizJobhist.GetTotalHours( ;
+			"/FHOURS/INCLINAC/INCLLTD/INCLALD", ;
+			.nPersId, .dPayPeriodStartDt, .dPayPeriodEndDt)	
+
+	if (.nSchedHoursWkByPayPeriod > 0 and .nHRSPDY != 0)
+		.nSchedDaysWkByPayPeriod=.nSchedHoursWkByPayPeriod/.nHRSPDY
+		.nTSWorkedHH = .nSchedHoursWkByPayPeriod
+	endif 
+
+	if (lnSchedHoliHours > 0 and .nHRSPDY != 0)
+		.nSchedHolidays=lnSchedHoliHours/.nHRSPDY
+	endif 	
+
+	*** APMCP vs GOVNT 
+	if inlist(.cBankId, "3") and inlist(.cUnionId, "APMCP")
+		.cCustomBankDeposit = lstr(.nRECAPMCP_DPY,0) + ;
+		iif(gcLang="F", " jours par année"," days per year")
+	endif 
+
+	.nRegularBankDeposit = nvl(tnVacUnitPerYear, 0.0)
+endif 
+store null to loBizJobhist
+
+return 
 
 *==========================================================
 protected procedure GetPRORATA()
@@ -287,7 +392,7 @@ protected procedure GetPRORATAEntitlement(tdStartDt,tdEndDt)
 * which an employee is entitle to take during current year, 
 * based on an interval date range.
 *
-local lnSelect, lnCount, lnFMS, lcXls 
+local lnSelect, lnCount, lnFMS, lcCSV 
 store 0 to lnCount, lnFMS 
 
 lnSelect = select()
@@ -340,8 +445,10 @@ endif
 if this._DEBUG	
 	select qWKHours 
 	go top in qWKHours 
-	lcXls = this.cLogPath + lower(alias()) + ".xls"
-	copy to (lcXls) type xls 
+	lcCSV = this.cLogPath + lower(alias()) + ".csv"
+	copy to (lcCSV) type csv 
+
+	.cTABLE = filetostr(lcCSV)
 endif 
 
 use in select("qWKHours")
@@ -359,14 +466,21 @@ protected procedure GetVacationDays_VACSEB()
 * The program handles Year To Date (YTD) entitlement.
 *
 local lnTotDaysWork
+store 0 to lnTotDaysWork
+
 if .nTotDaysWorked = 0
-	this.WriteLog("GetVacationDays_VACSEB() - " + ;
-			".nTotDaysWorked=" + transform(.nTotDaysWorked))
+	.cERROR = "USR:1000"
+	.cBatchNo = "VACSEB-"+iif(gcLang="F","EN ATTENTE","ON HOLD")
+
+	this.GetScheduleToWorkByPayPeriod( ;
+		.nRegularBankDeposit, this.nSEB_DAYSWKPERYEAR)
+
 	return 
 endif 	
 
 *** set step on 
 *** Build the vacation matrix for the plan 
+.cBatchNo = "VACSEB-OK"
 if empty(this.cVacBankCursor)
 	this.BuildVacationTable_VACSEB()
 endif 
@@ -379,6 +493,8 @@ endif
 	
 * Get the MAX number of vacation days allowed by union 
 lnTotDaysWork = .nTotDaysWorked 
+.nMAXDaysWorked = .nTotDaysWorked
+.nWorkDPY = this.nSEB_DAYSWKPERYEAR
 if .nTotDaysWorked > this.nSEB_DAYSWKPERYEAR
 	.nMAXDaysWorked = this.nSEB_DAYSWKPERYEAR
 	lnTotDaysWork = .nMAXDaysWorked 
@@ -404,7 +520,20 @@ else
 
 	.nTotVacDays = .nYTDVacDays
 	.nTotVacHH = .nYTDVacHH 
+
+	*** Identical to SICK object 	
+	.nEntitleDays = .nYTDVacDays
+	.nEntitleHH = .nYTDVacHH  
 endif 	
+
+*** Maximum allowed vacation days per year  
+this.SetMAXVacDays_VACSEB()
+
+*** Add scheduled hours to work by pay period 
+.nRegularBankDeposit = ;
+		iif((.cBankUnit="H"),.nEntitleHH,.nEntitleDays)
+this.GetScheduleToWorkByPayPeriod( ;
+	.nRegularBankDeposit, this.nSEB_DAYSWKPERYEAR)
 
 return
 endproc
@@ -426,14 +555,21 @@ protected procedure GetVacationDays_VACAPMCP()
 *	Écart Hrs	0	7	7	14	14	21	14	21	14	21	14	14	7	7	35
 *
 local lnTotDaysWork
-if .nTotDaysWorked = 0
-	this.WriteLog("GetVacationDays_VACAPMCP() - " + ;
-			".nTotDaysWorked=" + transform(.nTotDaysWorked))
+store 0 to lnTotDaysWork 
+
+if empty(.nTotDaysWorked) or empty(.nTotHoursWorked)
+	.cBatchNo = "VACAPMCP-"+iif(gcLang="F","EN ATTENTE","ON HOLD")
+	.cERROR = "USR:1000"
+
+	this.GetScheduleToWorkByPayPeriod ( ;
+		.nRegularBankDeposit, this.nAPMCP_DAYSWKPERYEAR)
+
 	return 
 endif 	
 
 *** set step on 
 *** Build the vacation matrix for the plan 
+.cBatchNo = "VACAPMCP-OK"
 if empty(this.cVacBankCursor)
 	this.BuildVacationTable_VACAPMCP()
 endif 
@@ -443,9 +579,11 @@ go top in TVac
 
 * Get the MAX number of vacation days allowed by union 
 lnTotDaysWork = .nTotDaysWorked 
+.nMAXDaysWorked = .nTotDaysWorked
+.nWorkDPY = this.nAPMCP_DAYSWKPERYEAR
 if .nTotDaysWorked > this.nAPMCP_DAYSWKPERYEAR
 	.nMAXDaysWorked = this.nAPMCP_DAYSWKPERYEAR
-	lnTotDaysWork = .nMAXDaysWorked 
+	lnTotDaysWork = .nMAXDaysWorked
 endif 	
 
 do case 
@@ -467,27 +605,43 @@ endcase
 
 *** Exact number of days 
 if found()
-	.nAPMCPTotVacDays = TVac.VacDays
-	.nAPMCPTotVacHH = this.ConvertTimeBankUnit(.nAPMCPTotVacDays)
+	.nAPTotVacDays = TVac.VacDays
+	.nAPTotVacHH = this.ConvertTimeBankUnit(.nAPTotVacDays)
 else 
 	*** Get YearToDate (YTD) entitlement 
 	this.GetYTDVacDays_VACAPMCP(lnTotDaysWork)
 
-	.nAPMCPTotVacDays = .nYTDVacDays
-	.nAPMCPTotVacHH = this.ConvertTimeBankUnit(.nAPMCPTotVacDays)
+	.nAPTotVacDays = .nYTDVacDays
+	.nAPTotVacHH = this.ConvertTimeBankUnit(.nAPTotVacDays)
 endif 	
 
 *** Get Govmnt (YTD) entitlement 
 this.GetYTDVacDays_VACGOUV(lnTotDaysWork)
-.nGVNTTotVacDays = .nYTDVacDays
-.nGVNTTotVacHH = this.ConvertTimeBankUnit(.nGVNTTotVacDays)
+.nGTTotVacDays = .nYTDVacDays
+.nGTTotVacHH = this.ConvertTimeBankUnit(.nGTTotVacDays)
 
 *** If did not work a full year do not allow
 * any vacation days.
-if (.nAPMCPTotVacDays - .nGVNTTotVacDays) > 0 
-	.nTotVacDays = (.nAPMCPTotVacDays - .nGVNTTotVacDays)
+if (.nAPTotVacDays - .nGTTotVacDays) > 0 
+	.nTotVacDays = (.nAPTotVacDays - .nGTTotVacDays)
 	.nTotVacHH = this.ConvertTimeBankUnit(.nTotVacDays)
+	
+	*** Identical to SICK object 	
+	.nEntitleDays = .nTotVacDays
+	.nEntitleHH = .nTotVacHH
 endif 
+
+*** Maximum allowed vacation days per year  
+this.SetMAXVacDays_VACAPMCP()
+
+*** Get the EXTRA vacation days 
+this.GetAPMCPExtraDays()
+
+*** Add scheduled hours to work by pay period 
+.nRegularBankDeposit = ;
+		iif((.cBankUnit="H"),.nEntitleHH,.nEntitleDays)
+this.GetScheduleToWorkByPayPeriod( ;
+	.nRegularBankDeposit, this.nAPMCP_DAYSWKPERYEAR)
 
 return
 endproc
@@ -499,13 +653,20 @@ protected procedure GetVacationDays_VACGOUV()
 * The program handles Year To Date (YTD) entitlement.
 *
 local lnTotDaysWork
+store 0 to lnTotDaysWork 
+
 if .nTotDaysWorked = 0
-	this.WriteLog("GetVacationDays_VACGOUV() - " + ;
-			".nTotDaysWorked=" + transform(.nTotDaysWorked))
+	.cERROR = "USR:1000"
+	.cBatchNo="VACGOUV-"+iif(gcLang="F","EN ATTENTE","ON HOLD")
+
+	this.GetScheduleToWorkByPayPeriod( ;
+		.nRegularBankDeposit, this.nAPMCP_DAYSWKPERYEAR)
+
 	return 
 endif 	
 
 *** Build the vacation matrix for the plan 
+.cBatchNo = "VACGOUV-OK"
 if empty(this.cVacBankCursor)
 	this.BuildVacationTable_VACGOUV()
 endif 
@@ -514,10 +675,12 @@ select TVac
 go top in TVac 
 
 * Get the MAX number of vacation days allowed by union 
-lnTotDaysWork = .nTotDaysWorked 
+lnTotDaysWork = .nTotDaysWorked
+.nMAXDaysWorked = .nTotDaysWorked
+.nWorkDPY = this.nAPMCP_DAYSWKPERYEAR
 if .nTotDaysWorked > this.nAPMCP_DAYSWKPERYEAR
 	.nMAXDaysWorked = this.nAPMCP_DAYSWKPERYEAR
-	lnTotDaysWork = .nMAXDaysWorked 
+	lnTotDaysWork = .nMAXDaysWorked
 endif
 
 do case 
@@ -546,7 +709,20 @@ else
 
 	.nTotVacDays = .nYTDVacDays
 	.nTotVacHH = .nYTDVacHH 
+	
+	*** Identical to SICK object 	
+	.nEntitleDays = .nTotVacDays
+	.nEntitleHH = .nTotVacHH
 endif 	
+
+*** Maximum allowed vacation days per year  
+this.SetMAXVacDays_VACGOUV()
+
+*** Add scheduled hours to work by pay period 
+.nRegularBankDeposit = ;
+		iif((.cBankUnit="H"),.nEntitleHH,.nEntitleDays)
+this.GetScheduleToWorkByPayPeriod( ;
+	.nRegularBankDeposit, this.nAPMCP_DAYSWKPERYEAR)
 
 return
 endproc
@@ -594,7 +770,41 @@ endscan
 
 *** Update the object 
 .nYTDVacDays = lnEntitleVacDays
-	
+.nMatrixRecNo = recno("TVac")
+
+return 
+endproc
+
+*==========================================================
+protected procedure SetMAXVacDays_VACSEB()
+*** Get the total allowed per year
+* based on seniority 
+*
+local lnSelect 
+
+if !used("TVac")
+	return 
+endif 	
+
+lnSelect = select()
+
+*** Get the MAX vacation days 
+do case 
+case .nSenYears < 5 
+	locate for TVac.TS5YLess = 0 and !eof()
+case .nSenYears >= 5 and .nSenYears < 10 
+	locate for TVac.TS5210Y = 0 and !eof()
+case .nSenYears >= 10  
+	locate for TVac.TS10YMore = 0 and !eof()
+endcase 
+
+if !bof()
+	skip - 1
+endif 
+.nEntitleDPY = nvl(TVac.VacDays, 0)
+
+select (lnSelect)
+
 return 
 endproc
 
@@ -646,7 +856,48 @@ endscan
 
 *** Update the object 
 .nYTDVacDays = lnEntitleVacDays
-	
+.nMatrixRecNo = recno("TVac")
+
+return 
+endproc
+
+*==========================================================
+protected procedure SetMAXVacDays_VACAPMCP()
+*** Get the total allowed per year
+* based on seniority 
+local lnSelect 
+
+if !used("TVac")
+	return 
+endif 	
+
+lnSelect = select()
+
+*** Get the MAX vacation days 
+do case 
+case .nSenYears < 12
+	locate for TVac.TA12YLess = 0 and !eof()
+case .nSenYears >= 12 and .nSenYears =< 13 
+	locate for TVac.TA12213Y = 0 and !eof()
+case .nSenYears >= 14 and .nSenYears =< 15 
+	locate for TVac.TA14215Y = 0 and !eof()
+case .nSenYears >= 16 and .nSenYears =< 17 
+	locate for TVac.TA16217Y = 0 and !eof()
+case .nSenYears >= 18 and .nSenYears =< 19
+	locate for TVac.TA18219Y = 0 and !eof()
+case .nSenYears >= 20 and .nSenYears =< 24
+	locate for TVac.TA20224Y = 0 and !eof()
+case .nSenYears >= 25 
+	locate for TVac.TA25YMore = 0 and !eof()
+endcase 
+
+if !bof()
+	skip - 1
+endif 
+.nEntitleDPY = nvl(TVac.VacDays, 0)
+
+select(lnSelect)
+
 return 
 endproc
 
@@ -659,6 +910,7 @@ local lcField, lnEntitleVacDays
 store "" to lcField 
 store 0 to lnEntitleVacDays
 
+*** stefan
 if empty(tnTotDaysWork)
 	this.WriteLog("GetYTDVacDays_VACGOUV() - " + ;
 			"tnTotDaysWork=" + transform(tnTotDaysWork))
@@ -666,17 +918,17 @@ if empty(tnTotDaysWork)
 endif 	
 
 do case 
-case .nGOVTSenYears > 1 and .nGOVTSenYears < 17 
+case .nGTSenYears > 1 and .nGTSenYears < 17 
 	lcField = "TG1217Y"
-case inlist(.nGOVTSenYears, 17, 18) 
+case inlist(.nGTSenYears, 17, 18) 
 	lcField = "TG17218Y"
-case inlist(.nGOVTSenYears, 19, 20) 
+case inlist(.nGTSenYears, 19, 20) 
 	lcField = "TG19220Y"
-case inlist(.nGOVTSenYears, 21, 22) 
+case inlist(.nGTSenYears, 21, 22) 
 	lcField = "TG21222Y"
-case inlist(.nGOVTSenYears, 23, 24) 
+case inlist(.nGTSenYears, 23, 24) 
 	lcField = "TG23224Y"
-case .nGOVTSenYears >= 25 
+case .nGTSenYears >= 25 
 	lcField = "TG25YMore"
 endcase 
 
@@ -696,10 +948,48 @@ endscan
 
 *** Update the object 
 .nYTDVacDays = lnEntitleVacDays
-	
+.nMatrixRecNo = recno("TVac")
+
 return 
 endproc
 
+*=========================================================
+protected procedure SetMAXVacDays_VACGOUV()
+*** Get the total allowed per year
+* based on seniority 
+local lnSelect 
+
+if !used("TVac")
+	return 
+endif 	
+
+lnSelect = select()
+
+*** Get the MAX vacation days 
+do case 
+case .nGTSenYears > 1 and .nGTSenYears < 17 
+	locate for TVac.TG1217Y = 0 and !eof()
+case inlist(.nGTSenYears, 17, 18) 
+	locate for TVac.TG17218Y = 0 and !eof()
+case inlist(.nGTSenYears, 19, 20) 
+	locate for TVac.TG19220Y = 0 and !eof()
+case inlist(.nGTSenYears, 21, 22) 
+	locate for TVac.TG21222Y = 0 and !eof()
+case inlist(.nGTSenYears, 23, 24) 
+	locate for TVac.TG23224Y = 0 and !eof()
+case .nGTSenYears >= 25 
+	locate for TVac.TG25YMore = 0 and !eof()
+endcase 
+
+if !bof()
+	skip - 1
+endif 
+.nEntitleDPY = nvl(TVac.VacDays, 0)
+
+select(lnSelect)
+
+return
+endproc
 *=========================================================
 #define GET_UNION_LEAVE
 *=========================================================
@@ -708,15 +998,34 @@ protected procedure GetVacationDays_SYNSEB()
 * number of days, to which an employee that belongs 
 * to a union is entitled.
 *
-if this.nSEB_UNION_LEAVE_DAYS <= 0 
-	this.WriteLog("GetVacationDays_SYNSEB() - " + ;
-			"nSEB_UNION_LEAVE_DAYS = " + ;
-			transform(this.nSEB_UNION_LEAVE_DAYS))
+if .dPayPeriodStartDt > .dStartDt or ;
+this.nSEB_UNION_LEAVE_DAYS <= 0 
+	.cERROR = "USR:1000"
+	.cBatchNo="SYNSEB-"+iif(gcLang="F","EN ATTENTE","ON HOLD")
+
+	this.GetScheduleToWorkByPayPeriod( ;
+		.nRegularBankDeposit, this.nSEB_UNION_LEAVE_DAYS)
+
 	return 
 endif 	
 
+.cBatchNo = "SYNSEB-OK"
+
 .nTotVacDays = this.nSEB_UNION_LEAVE_DAYS
 .nTotVacHH = this.ConvertTimeBankUnit(.nTotVacDays)
+
+*** Identical to SICK object 	
+.nEntitleDays = .nTotVacDays
+.nEntitleHH = .nTotVacHH
+
+.nWorkDPY = this.nSEB_DAYSWKPERYEAR
+.nEntitleDPY = .nTotVacDays
+
+*** Add scheduled hours to work by pay period 
+.nRegularBankDeposit = ;
+		iif((.cBankUnit="H"),.nEntitleHH,.nEntitleDays)
+this.GetScheduleToWorkByPayPeriod( ;
+	.nRegularBankDeposit, this.nSEB_UNION_LEAVE_DAYS)
 
 return
 endproc
@@ -727,15 +1036,34 @@ protected procedure GetVacationDays_SYNAPMCP()
 * number of days, to which an employee that belongs 
 * to a union is entitled.
 *
-if this.nAPMCP_UNION_LEAVE_DAYS <= 0 
-	this.WriteLog("GetVacationDays_SYNAPMCP() - " + ;
-			"nAPMCP_UNION_LEAVE_DAYS = " + ;
-			transform(this.nAPMCP_UNION_LEAVE_DAYS))
+if .dPayPeriodStartDt > .dStartDt or ;
+this.nAPMCP_UNION_LEAVE_DAYS <= 0 
+	.cERROR = "USR:1000"
+	.cBatchNo="SYNAPMCP-"+iif(gcLang="F","EN ATTENTE","ON HOLD")
+
+	this.GetScheduleToWorkByPayPeriod( ;
+		.nRegularBankDeposit, this.nAPMCP_UNION_LEAVE_DAYS)
+
 	return 
 endif 	
 
+.cBatchNo = "SYNAPMCP-OK"
+
 .nTotVacDays = this.nAPMCP_UNION_LEAVE_DAYS
 .nTotVacHH = this.ConvertTimeBankUnit(.nTotVacDays)
+
+*** Identical to SICK object 	
+.nEntitleDays = .nTotVacDays
+.nEntitleHH = .nTotVacHH
+
+.nWorkDPY = this.nAPMCP_DAYSWKPERYEAR
+.nEntitleDPY = .nTotVacDays
+
+*** Add scheduled hours to work by pay period 
+.nRegularBankDeposit = ;
+		iif((.cBankUnit="H"),.nEntitleHH,.nEntitleDays)
+this.GetScheduleToWorkByPayPeriod( ;
+	.nRegularBankDeposit, this.nAPMCP_UNION_LEAVE_DAYS)
 
 return
 endproc
@@ -757,6 +1085,8 @@ endif
 
 .nTotVacDays = 1
 .nTotVacHH = this.nSEB_FLEX_HOURS
+
+.nEntitleDPY = .nTotVacDays
 
 return 
 
@@ -817,6 +1147,8 @@ if this._DEBUG
 	lcFile = this.cLogPath + lower(trim(alias())) + ".csv" 
 	copy to (lcFile) type csv 
 	go top in TVac
+	
+	.cRuleMatrix = filetostr(lcFile)
 endif 
 	
 select(lnSelect)
@@ -886,9 +1218,20 @@ if this._DEBUG
 	select TVac 
 	go top in TVac
 	lcFile = this.cLogPath + trim(.cPlanId) + ;
-			lower(trim(alias()))+ "_"+sys(2015)+ ".dbf" 
+				lower(trim(alias())) + ".csv" 
+	copy to (lcFile) type csv 
+
+	.cRuleMatrix = filetostr(lcFile)
+
+
+****** TO REMOVE ********************************
+	lcFile = this.cLogPath + trim(.cPlanId) + ;
+				lower(trim(alias())) + ".dbf" 
+	go top in TVac
 	copy to (lcFile)
 	go top in TVac
+*************************************************	
+	
 endif 
 	
 select(lnSelect)
@@ -969,9 +1312,12 @@ if this._DEBUG
 	select TVac 
 	go top in TVac
 	lcFile = this.cLogPath + trim(.cPlanId) + ;
-			lower(trim(alias()))+ sys(2015) + ".xls" 
-	copy to (lcFile) type xls 
+			lower(trim(alias()))+ ".csv" 
+	copy to (lcFile) type csv
 	go top in TVac
+
+	.cRuleMatrix = filetostr(lcFile)
+
 endif 
 
 *** Fix some exceptions in the vacation days matrix 	
@@ -1053,8 +1399,8 @@ if this._DEBUG
 	select TVac 
 	go top in TVac
 	lcFile = this.cLogPath + trim(.cPlanId) + ;
-			lower(trim(alias()))+ sys(2015) + ".xls" 
-	copy to (lcFile) type xls 
+			lower(trim(alias()))+ ".csv" 
+	copy to (lcFile) type csv
 	go top in TVac
 endif 
 
@@ -1207,18 +1553,62 @@ endproc
 *=========================================================
 #define HELPER_METHODS 
 *=========================================================
+protected procedure GetAPMCPExtraDays()
+*** APMCP employees which come from GOV'T 
+* get an extra of 5 days of vacation 
+*
+* Relationship between SFPQ(APMCP) and Government employees
+*		APMCP - gets values from row: Écart SFPQ
+*
+*	Année			1	12	13	14	15	16	17	18	19	20	21	22	23	24	25
+*	Ans			1	12	13	14	15	16	17	18	19	20	21	22	23	24	25
+*	SFPQ			20	21	21	22	22	23	23	24	24	25	25	25	25	25	30
+*	Gouv			20	20	20	20	20	20	21	21	22	22	23	23	24	24	25
+*	Écart SFPQ	0	1	1	2	2	3	2	3	2	3	2	2	1	1	5
+*	Écart Hrs	0	7	7	14	14	21	14	21	14	21	14	14	7	7	35
+*
+if empty(.nSenYears) or empty(.nGTSenYears)
+	return 
+endif 
+	
+do case 
+case .nSenYears >= 12 and .nSenYears <= 13 and .nGTSenYears = 20 
+	.nRECAPMCP_DPY = 1
+case .nSenYears >= 14 and .nSenYears <= 15 and .nGTSenYears = 20 
+	.nRECAPMCP_DPY = 2
+case .nSenYears > 15 and .nSenYears <= 16 and .nGTSenYears = 20 
+	.nRECAPMCP_DPY = 3
+case .nSenYears > 16 and .nSenYears <= 17 and .nGTSenYears = 21
+	.nRECAPMCP_DPY = 2
+case .nSenYears > 17 and .nSenYears <= 18 and .nGTSenYears = 21
+	.nRECAPMCP_DPY = 3
+case .nSenYears > 18 and .nSenYears <= 19 and .nGTSenYears = 22
+	.nRECAPMCP_DPY = 2
+case .nSenYears > 19 and .nSenYears <= 20 and .nGTSenYears = 22
+	.nRECAPMCP_DPY = 3
+case .nSenYears > 20 and .nSenYears <= 22 and .nGTSenYears = 23
+	.nRECAPMCP_DPY = 2
+case .nSenYears > 22 and .nSenYears <= 24 and .nGTSenYears = 24
+	.nRECAPMCP_DPY = 1
+case .nSenYears >= 25 and .nGTSenYears = 25  
+	.nRECAPMCP_DPY = 5
+endcase 
+	
+return 
+
+*=========================================================
 protected procedure GetFullMonthOfService()
 *** Assign 1 day off if more than 1/2 of month 
 * has been worked 
 *
 local lnFullMonthOfService, lnSchedHrsOfService 
+local lnActualHrsOfService
+
 store 0 to lnFullMonthOfService, lnSchedHrsOfService
+store 0 to lnActualHrsOfService
 
 *** Not worked at all in a given period 
 if empty(.nMTDHoursWorked)
-	this.WriteLog("GetFullMonthOfService() - " + ;
-			transform(lnFullMonthOfService) )
-
 	return lnFullMonthOfService
 endif 	
 
@@ -1228,8 +1618,9 @@ lnSchedHrsOfService = .nMTDSchedToWork
 if lnSchedHrsOfService = 0 
 	lnSchedHrsOfService = this.nMontlyAVGWorkHours
 endif 
-	
-lnFullMonthOfService = iif(lnSchedHrsOfService >= ;
+
+lnActualHrsOfService = .nMTDHoursWorked
+lnFullMonthOfService = iif(lnActualHrsOfService >= ;
 	round(lnSchedHrsOfService*this.nFullMonthServicePCT,0),1,0) 
 
 return lnFullMonthOfService
@@ -1290,8 +1681,8 @@ addproperty(loR, "cSchedId", "")
 *** Seniority fields 
 addproperty(loR, "nSenMths", 0)
 addproperty(loR, "nSenYears", 0)
-addproperty(loR, "nGOVTSenMths", 0)
-addproperty(loR, "nGOVTSenYears", 0)
+addproperty(loR, "nGTSenMths", 0)
+addproperty(loR, "nGTSenYears", 0)
 
 *** Counter for transactions 
 addproperty(loR, "cTCNT", "")
@@ -1307,6 +1698,16 @@ addproperty(loR, "dLYEndDt", {})
 *** Effective Date 
 addproperty(loR, "dEffDt", {})
 
+*** Pay Calendar  
+addproperty(loR, "cPayGRP", "")
+addproperty(loR, "dPayPeriodStartDt", {})
+addproperty(loR, "dPayPeriodEndDt", {})
+addproperty(loR, "cPayCycle", "")
+addproperty(loR, "cPayNo", "")
+addproperty(loR, "nSFPQPayNo", 0)
+addproperty(loR, "IsThe2ndPay", .f.)
+
+
 *** Month To Date (MTD)
 *** Entitlement calculation 
 addproperty(loR, "nMTDSchedToWork", 0)
@@ -1315,26 +1716,43 @@ addproperty(loR, "nTotHoursWorked", 0)
 addproperty(loR, "nTotDaysWorked", 0)
 addproperty(loR, "nMAXDaysWorked", 0)
 addproperty(loR, "nFullMonthOfService", 0)
+addproperty(loR, "nRECAPMCP_DPY", 0)
+addproperty(loR, "dOriginalHiredDt", {})
 
 *** Schedule average hours/day 
 addproperty(loR, "nHRSPDY", 0)
+addproperty(loR, "nSchedDaysWkByPayPeriod", 0)
+addproperty(loR, "nSchedHoursWkByPayPeriod", 0)
+addproperty(loR, "nSchedHolidays", 0)
+addproperty(loR, "nRegularBankDeposit", 0)
+addproperty(loR, "nCalculatedBankDeposit", 0)
+addproperty(loR, "cCustomBankDeposit", "")
 
 *** Bank unit 
 addproperty(loR, "cBankUnit", "")
 
-*** Year To Date (YTD)
-*** Employee entitlement 
+*** Employee totals 
+addproperty(loR, "nTotSickDays", 0)
+addproperty(loR, "nTotSickHH", 0)
+addproperty(loR, "nYTDSickDays", 0)
+addproperty(loR, "nYTDSickHH", 0)
 addproperty(loR, "nYTDVacDays", 0)
 addproperty(loR, "nYTDVacHH", 0)
 addproperty(loR, "nTotVacDays", 0)
 addproperty(loR, "nTotVacHH", 0)
 
+*** Employee entitlement 
+addproperty(loR, "nEntitleDays", 0)
+addproperty(loR, "nEntitleHH", 0)
+addproperty(loR, "nENTAdjDays", 0)
+addproperty(loR, "nENTAdjHH", 0)
+
 *** Custom fields by Union 
 *** APMCP & GOVT  
-addproperty(loR, "nAPMCPTotVacDays", 0)
-addproperty(loR, "nAPMCPTotVacHH", 0)
-addproperty(loR, "nGVNTTotVacDays", 0)
-addproperty(loR, "nGVNTTotVacHH", 0)
+addproperty(loR, "nAPTotVacDays", 0)
+addproperty(loR, "nAPTotVacHH", 0)
+addproperty(loR, "nGTTotVacDays", 0)
+addproperty(loR, "nGTTotVacHH", 0)
 
 *** Timesheet posting parameters  
 addproperty(loR, "IsTSRealTime", .f.)
@@ -1348,32 +1766,108 @@ addproperty(loR, "nTSWorkedHH", 0)
 addproperty(loR, "nPlanBalMin", 0)
 addproperty(loR, "nPlanBalMax", 0)
 
+*** Year To Date deposit 
+addproperty(loR, "nYTDBankDeposit", 0)
+
 **** ERROR Handler 
 addproperty(loR, "cERROR", "")
+addproperty(loR, "cBatchNo", "")
+
+**** FMS & Vacation rules tables 
+addproperty(loR, "cTABLE", "")
+
+**** Rules
+addproperty(loR, "nWorkDPY", 0)
+addproperty(loR, "nEntitleDPY", 0)
+
+*** Vacation rule matrix 
+addproperty(loR, "cRuleMatrix", "")
+addproperty(loR, "nMatrixRecNo", 0)
 
 return loR
 
 *=========================================================
 procedure SpoolObjectProperties(toR As Object)
 *** S.G. - Logs all object properies 
-local lcAsisField
+local lcAsisField, lcMemo, lcMemoT, loCursor
+local lcUNIQID, lcDBF, lcKEY, lcAction
+local lcOLDUSER, lcNEWUSER, ltOLDDTM, lcOLDPERS
+local lcMHeader, lcNEWPERS
+
+store "" to lcMemo, lcMemoT, lcUNIQID, lcDBF, lcKEY
+store "" to lcAction, lcOLDUSER, lcNEWUSER, lcMHeader
+store "" to lcNEWPERS
+store {} to ltOLDDTM
+store null to loCursor
 
 if isnull(toR)
 	return 
 endif 
 
-if !this._DEBUG or empty(this.cLogPath) 
+with this 
+
+if !._DEBUG
 	return 
 endif 
 
-this.WriteLog(" ... " + CRLF)
 =amembers(gaRS, toR, 1)
 for lnN = 1 to alen(gaRS, 1)
-	lcAsisField = "toR." + trim(gaRS[lnN, 1])
-	this.WriteLog("SpoolObjectProperties() :: " + ;
-		trim(lcAsisField) + " = " + ;
-		transform(evaluate(lcAsisField)))
+	lcAsisField = "toR." + alltrim(gaRS[lnN, 1])
+
+	if inlist(upper(alltrim(gaRS[lnN, 1])), "CRULEMATRIX")
+		lcMemoT = lcMemoT + ;
+				trim(lcAsisField) + "=" + ;
+				transform(evaluate(lcAsisField))+CRLF 
+
+		lcMHeader = leftto(transform(evaluate(lcAsisField)),CRLF)
+		lcMemo = lcMemo + ;
+				trim(lcAsisField) + "=" + lcMHeader + CRLF 
+	else  
+		lcMemo = lcMemo + ;
+				trim(lcAsisField) + "=" + ;
+				transform(evaluate(lcAsisField))+CRLF 
+	endif 
 next 
+
+*** set step on 
+if !empty(lcMemo)
+	lcMemo = strtran(lcMemo, "'", "''")
+
+	lcUNIQID = uniqid()
+	lcDBF = "TIMETMP"
+	lcKEY = nvl(toR.cBatchNo, "")
+	lcAction = "P" 
+	lcOLDUSER = lstr(gnMyPersId)
+	lcNEWUSER = name(gnMyPersId)
+	lcOLDPERS = lstr(toR.nPersId,0)
+	ltOLDDTM = datetime()
+	lcNEWPERS = nvl(toR.cBankId, "")
+
+	text to lcSql textmerge noshow pretext 1+4 
+		insert into Audite ( 
+				AU_DBF, AU_KEY, AU_ACTION, 
+				AU_OLDUSER, AU_OLDDTM, AU_OLDPERS,
+				AU_OLDVAL, AU_NEWUSER, AU_NEWDTM, 
+				AU_NEWPERS, AU_NEWVAL, AU_UNIQID, AU_DATE)
+		values 
+				('<<lcDBF>>', '<<lcKEY>>', '<<lcAction>>', 
+					'<<lcOLDUSER>>', '<<ltOLDDTM>>', '<<lcOLDPERS>>',
+					'<<lcMemo>>', '<<lcNEWUSER>>', '<<ltOLDDTM>>', 
+					'<<lcNEWPERS>>', '<<lcMemoT>>', '<<lcUNIQID>>', '<<ltOLDDTM>>')
+	endtext 
+
+	*** Pass trough SQL 
+	loCursor = goDatamgr.SQLexec("", ;
+			set("datasession"),goDataMgr.ConnectionHandle,;
+			lcSql)
+
+	if isnull(loCursor)
+		return 
+	endif 	
+endif 
+
+store null to loCursor
+endwith 
 
 return 
 

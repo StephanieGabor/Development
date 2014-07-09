@@ -1,3 +1,4 @@
+*=================================================================================
 *  Program...........: CSickBank.PRG
 *  Author............: Stefan Gabor 
 *  Project...........: Carver Human Resources Zoo62
@@ -5,17 +6,17 @@
 *  Code page.........: 1252 (WINDOWS)
 *  Copyright.........: (c) Carver Technologies 2013
 *
-*  Description.......: The class handles sick, mobile and compensatory days 
-*                    : calculation. 
-*                    : The class is build around the plan id. The key point is 
-*                    : that the class is currently called from two different places 
-*                    : and it is easily expandable.
+*  Description.......: The class handles sick, mobile and compensatory 
+*                    : days calculation. 
+*                    : The class is build around the plan id. The key
+*                    : point is that the class is currently called
+*                    : from two different places and it is easily expandable.
 *                    :    1) annual entitlement 
 *                    :    2) time sheet posting. 
 *                    :
-* Specification      : 1 - The class handles real time entitlement for companies 
-*                    :     which do not use the payroll system and the event 
-*                    :     is triggered from the timesheet
+* Specification      : 1 - The class handles real time entitlement for
+*                    :     companies which do not use the payroll system 
+*                    :     and the event is triggered from the timesheet
 *                    : 2 - Handles entitlement of multiple banks of 
 *                    :     the same type simultaneously
 *                    :
@@ -36,7 +37,11 @@
 *                    : 2 - PostEntitlement(object) - this call will perform 
 *                    :		the entitlement calculation.
 *                    :
+*                    : Banks In (1, 2, 5, 7)
 *                    :
+*                    :
+*=================================================================================
+*
 *#########################################################
 
 **** Class definition 
@@ -46,6 +51,7 @@ nFullMonthServicePCT = .5  			&& Precent given for full month of service
 nMontlyAVGWorkHours = 130				&& Monthly average working hours  
 nAPMCP_DAYSWKPERYEAR = 248.6			&& APMCP maximum yearly working days
 nMALAPMCP_SICKDAYSPERYEAR = 5			&& APMCP maximum sick days per year  
+nGOUV_SICKDAYSPERYEAR = 12				&& GOUV maximum sick days per year
 nSEB_DAYSWKPERYEAR = 260 				&& SEB maximum yearly working days 
 nMALSEB_SICKDAYSPERYEAR = 10			&& SEB maximum sick days per year  
 nMOBSEB_MOBILEDAYSPERYEAR = 6			&& SEB & ATT maximum mobile days per year  
@@ -56,11 +62,14 @@ nMALATT_SICKDAYSPERYEAR = 10			&& ATT maximum sick days per year
 nMALATT_WAITINGPERIODDAYS= 4			&& ATT waiting period number of days 
 nRECAPMCP_STARTDATE= {1991/07/25} 	&& APMCP compensation start date  
 
+nSEB_OVERTIMEDAYSPERYEAR = 5			&& SEB maximum overtime days per year  
+
+
 *** Property 
 cLogStatus 	= "startlog.txt" 			&& start logging 
 cLogPath = "\TEMP\" 						&& log folder 
 _DEBUG = .T.								&& set .T. for debugging 
-
+oRS = null									&& Object container 
 
 *=========================================================
 #define POST_ENTITLEMENT
@@ -86,6 +95,7 @@ if !this.ValidateEntitlement(toRS)
 	return toRS 
 endif 
 
+this.oRS = toRS
 with toRS 
 	*** Get vacation days 
 	this.GetPRORATA()
@@ -158,8 +168,9 @@ protected procedure SetSickBankProperty(tnSenMths)
 *
 local loBizSched, ldSeniorField, lcMAXBalance, lcMINBalance
 local llMonthlyCalc, llYearlyCalc
+local loBizJobhist, loCsrJH
 
-store null to loBizSched
+store null to loBizSched, loBizJobhist, loCsrJH
 store "" to lcMAXBalance, lcMINBalance
 
 *** ID's 
@@ -176,40 +187,41 @@ if empty(.cDepositOPT)
 	.cDepositOPT = trim(qAPLAN.AP_DEPOOPT)
 endif 
 
+loBizJobhist = GetBiz("JOBHIST")
+if isnull(loBizJobhist)
+	return
+endif 
+
+*** Many issue with different JOBHIST aliases 
+* Get the latest instead ...  	
+loCsrJH = loBizJobhist.GetPersAndJobhistByPersidAndDate( ;
+			"/CURSOR=qqJH", "*", lnPersid, date())
+if isnull(loCsrJH)
+	return
+endif 
+
 *** Load union into object 
-if used("vJobhist") and empty(.cUnionId)
-	.cUnionId = trim(vJobhist.H_UNION)
-endif	
-if used("qJobhist") and empty(.cUnionId)
-	.cUnionId = trim(qJobhist.H_UNION)
+if empty(.cUnionId)
+	.cUnionId = trim(qqJH.H_UNION)
 endif	
 
 *** Load schedule id into object 
-if used("vJobhist") and empty(.cSchedId)
-	.cSchedId = trim(vJobhist.H_SCHEDID)
-endif 
-if used("qJobhist") and empty(.cSchedId)
-	.cSchedId = trim(qJobhist.H_SCHEDID)
+if empty(.cSchedId)
+	.cSchedId = trim(qqJH.H_SCHEDID)
 endif 
 
 *** Load pay group into object 
-if used("vJobhist") and empty(.cPayGRP)
-	.cPayGRP = trim(vJobhist.H_PAYGRP)
-endif 
-if used("qJobhist") and empty(.cPayGRP)
-	.cPayGRP = trim(qJobhist.H_PAYGRP)
+if empty(.cPayGRP)
+	.cPayGRP = trim(qqJH.H_PAYGRP)
 endif 
 
 *** Load jobhist effdt into object 
-if used("vJobhist") and empty(.dEffDt)
-	.dEffDt = vJobhist.H_EFFDT 
-endif 
-if used("qJobhist") and empty(.dEffDt)
-	.dEffDt = qJobhist.H_EFFDT 
+if empty(.dEffDt)
+	.dEffDt = qqJH.H_EFFDT 
 endif 
 
 *** Recuparation bank APMCP 
-if "APMCP"$alltrim(.cUnionId)
+if inlist(.cUnionId, "APMCP")
 	do case 
 	case "APM35"$.cSchedId 
 		.nRECAPMCP_DPY = 5
@@ -236,9 +248,12 @@ if used("vPERS") and !empty(qAPLAN.AP_SENDT)
 	ldSeniorField = strtran(ldSeniorField, "PERS", "vPERS")
 	ldSeniorField = evaluate(ldSeniorField)
 
-	.nGOVTSenYears = year(date())-year(ldSeniorField )
-	.nGOVTSenMths = .nGOVTSenYears*12 
+	.nGTSenYears = year(date())-year(ldSeniorField )
+	.nGTSenMths = .nGTSenYears*12 
 endif 
+
+*** Hired date 
+.dOriginalHiredDt = qqJH.E_ORIGHIRE 
 
 *** Current Year Entitlement 
 .dStartDt = qAPLAN.AP_EFFDT
@@ -311,7 +326,8 @@ endif
 *** Add pay calendar dates 
 this.GetPayPeriod()
 
-store null to loBizSched
+store null to loBizSched, loBizJobhist, loCsrJH
+use in select("qqJH")
 
 return 
 endproc
@@ -362,13 +378,13 @@ if nvl(.IsTSRealTime,.f.) = .t.
 endif 
 
 *** Generic stuff that applies to plan 
-this.GetPRORATAEntitlement(.dStartDt,.dEndDt)
+this.GetPRORATAEntitlement(.dStartDt, .dEndDt)
 
 *** Plan specific stuff 
-if lower(pemstatus(this, "GetSickDays_" + ;
+if lower(pemstatus(this, "GetMethod_" + ;
 	trim(.cPlanId), 3)) = "method"
 	
-	lcCommand = "this.GetSickDays_"+trim(.cPlanId)+"()"
+	lcCommand = "this.GetMethod_"+trim(.cPlanId)+"()"
 	return &lcCommand
 endif 
 
@@ -381,7 +397,7 @@ protected procedure GetPRORATAEntitlement(tdStartDt,tdEndDt)
 * which an employee is entitle to take during current year, 
 * based on an interval date range.
 *
-local lnSelect, lnCount, lnFMS, lcXls 
+local lnSelect, lnCount, lnFMS, lcCSV 
 store 0 to lnCount, lnFMS 
 
 lnSelect = select()
@@ -393,6 +409,14 @@ create cursor qWKHours (IYear N(4), IMonth N(3), ;
 	SchedWKHrs N(14, 4), MthAVGHrs N(14, 4), RealWKHrs N(14, 4))
 
 index on str(IYear,4) + str(IMonth, 2) tag TWKHRS  
+
+if .dTSEndDt < tdStartDt  
+	this.WriteLog("GetMethod_MALSEB() - " + ;
+		"The plan start date is outside of the timesheet dates range!")
+
+	.cERROR = "USR:1001"
+	return 
+endif 
 
 *** I assume that referential year starts from 1st day of the month
 .dStartOfMonthDt = day1(tdStartDt) 
@@ -435,10 +459,11 @@ endif
 if this._DEBUG	
 	select qWKHours 
 	go top in qWKHours 
-	lcXls = this.cLogPath+"_SICK_"+lower(alias())+".xls"
-	copy to (lcXls) type xls 
+	lcCSV = this.cLogPath + lower(alias()) + ".csv"
+	copy to (lcCSV) type csv 
+	.cTABLE = filetostr(lcCSV)
 endif 
-
+	
 use in select("qWKHours")
 select( lnSelect )
 
@@ -491,7 +516,7 @@ if !isnull(loBizTimetmp)
 	.nTSWorkedHH = nvl(qTimeT2.TOTHRS, 0)
 
 	if (.nHRSPDY != 0 and qTimeT2.TOTHRS != 0)
-		.nTSWorkedDays = round(qTimeT2.TOTHRS/.nHRSPDY,2)
+		.nTSWorkedDays = qTimeT2.TOTHRS/.nHRSPDY
 	endif 
 		
 	use in select("qTimeT2")
@@ -541,28 +566,77 @@ store null to loBizTimeDt
 return
 
 *=========================================================
-protected procedure GetScheduleToWorkByPayPeriod()
+protected procedure GetScheduleToWorkByPayPeriod
+lparameters tnSickDaysPerYear, tnDaysWorkPerYear
 *** Get how many days the employee is scheduled 
 * to work in this pay period 
 *
+local loBizJobhist, lnSchedHoliHours
+store null to loBizJobhist
+store 0 to lnSchedHoliHours
+
+if !inlist(.cBankId, "2", "7") and ;
+empty(tnSickDaysPerYear) or empty(tnDaysWorkPerYear)
+	return 
+endif 	
+
 if !empty(.dTSStartDt) and !empty(.dTSEndDt)
+
+	*** It does not include paid holidays 
+	*/ .nSchedDaysWkByPayPeriod = TimeWorked("DAYS", ;
+	*/		.nPersId, .dTSStartDt, .dTSEndDt)
+	*/.nSchedHoursWkByPayPeriod = TimeWorked("HOURS", ;
+	*/		.nPersId, .dTSStartDt, .dTSEndDt)
+
 	*** Scheduled to work by pay period 
-	.nSchedDaysWkByPayPeriod = TimeWorked("DAYS", ;
-			.nPersId, .dTSStartDt, .dTSEndDt)
-	.nSchedHoursWkByPayPeriod = TimeWorked("HOURS", ;
-			.nPersId, .dTSStartDt, .dTSEndDt)
+	loBizJobhist = GetBiz("JOBHIST")
+	if isnull(loBizJobhist)
+		return 
+	endif 
+
+	.nSchedHoursWkByPayPeriod = loBizJobhist.GetTotalHours( ;
+			"/PDHOURS/INCLINAC/INCLLTD/INCLALD", ;
+			.nPersId, .dTSStartDt, .dTSEndDt)	
+	
+	lnSchedHoliHours = loBizJobhist.GetTotalHours( ;
+			"/FHOURS/INCLINAC/INCLLTD/INCLALD", ;
+			.nPersId, .dTSStartDt, .dTSEndDt)	
+
+	if (.nSchedHoursWkByPayPeriod > 0 and .nHRSPDY != 0)
+		.nSchedDaysWkByPayPeriod=.nSchedHoursWkByPayPeriod/.nHRSPDY
+	endif 
+
+	if (lnSchedHoliHours > 0 and .nHRSPDY != 0)
+		.nSchedHolidays=lnSchedHoliHours/.nHRSPDY
+	endif 
+
+	*** GOUV 
+	if inlist(.cBankId, "2") 
+		.cCustomBankDeposit = iif(gcLang="F",;
+				"1 jour >= 1/2 MCS","1 day >= 1/2 FMS")
+		return 
+	endif 
+		
+	*** RECAPMCP
+	if inlist(.cBankId, "7") 
+		.cCustomBankDeposit = iif(gcLang="F", ;
+			lstr(.nRECAPMCP_DPY,0)+ ;
+			" jours par année"," days per year")
+	endif 
 
 	.nRegularBankDeposit = ;
-		(this.nMALSEB_SICKDAYSPERYEAR/this.nSEB_DAYSWKPERYEAR)*;
-		.nSchedHoursWkByPayPeriod
+			(tnSickDaysPerYear/tnDaysWorkPerYear) * ;
+				.nSchedHoursWkByPayPeriod
+
 endif 
+store null to loBizJobhist
 
 return 
 
 *=========================================================
 #define GET_SICK_DAYS_BY_PLAN 
 *=========================================================
-protected procedure GetSickDays_MALSEB()
+protected procedure GetMethod_MALSEB()
 *** Gets the current year's number of sick days, 
 * to which an employee is entitled, maximum 10 
 * (+/-) 4 waiting period in days 
@@ -570,7 +644,7 @@ protected procedure GetSickDays_MALSEB()
 
 *** Verify that the yearly entitlment has been completed.
 if .dTSStartDt > .dEndDt
-	this.WriteLog("GetSickDays_MALSEB() - " + ;
+	this.WriteLog("GetMethod_MALSEB() - " + ;
 		"The entitlement has not been rolled over!")
 
 	.cERROR = "The entitlement has not been rolled over!"
@@ -579,34 +653,42 @@ endif
 *** Sick bank should not take the previous year hours  
 *** Total days worked are populated by the timesheet  
 .nTotDaysWorked = .nTotDaysWorked + .nTSWorkedDays 
+.nTotHoursWorked = .nTotDaysWorked *.nHRSPDY
 
 if .nTotDaysWorked = 0
-	this.WriteLog("GetSickDays_MALSEB() - " + ;
-			"nTotDaysWorked = " + transform(.nTotDaysWorked))
+	.cERROR="nTotDaysWorked = "+transform(.nTotDaysWorked)
+	.cBatchNo = "MALSEB-ON HOLD"
+
+	this.SpoolObjectProperties(this.oRS)
 	return 
 endif 	
 
 *** Get the MAX number of working days per union  
 if .nTotDaysWorked > this.nSEB_DAYSWKPERYEAR
 	.nMAXDaysWorked = this.nSEB_DAYSWKPERYEAR
+	
 	.nTotDaysWorked = .nMAXDaysWorked 
+	.nTotHoursWorked = .nTotDaysWorked *.nHRSPDY
 endif 	
 
 *** Add scheduled hours to work by pay period 
-this.GetScheduleToWorkByPayPeriod()
+this.GetScheduleToWorkByPayPeriod( ;
+	this.nMALSEB_SICKDAYSPERYEAR,this.nSEB_DAYSWKPERYEAR)
 
 *** 10 sick days / 260 days per year 
-.nYTDSickDays=(this.nMALSEB_SICKDAYSPERYEAR/this.nSEB_DAYSWKPERYEAR)*;
-			.nTotDaysWorked 
+.nWorkDPY = this.nSEB_DAYSWKPERYEAR
+.nEntitleDPY = this.nMALSEB_SICKDAYSPERYEAR
+.nYTDSickDays=(this.nMALSEB_SICKDAYSPERYEAR / ;
+			this.nSEB_DAYSWKPERYEAR)*.nTotDaysWorked 
 
 *** Sum up the totals  
 .nTotSickDays = .nYTDSickDays
 .nTotSickHH = this.ConvertTimeBankUnit(.nTotSickDays)
 
 *** Do not allow more than maximum 
-if .nTotSickHH > .nRegularBankDeposit
+if round((.nTotSickHH-.nYTDBankDeposit),4) > round(.nRegularBankDeposit,4)
 	.nCalculatedBankDeposit = .nTotSickHH 
-	.nTotSickHH = .nRegularBankDeposit
+	.nTotSickHH = (.nYTDBankDeposit+.nRegularBankDeposit)
 endif 	
 
 *** Entitlement Year Yo Date - real time 
@@ -615,88 +697,138 @@ if (.nHRSPDY != 0)
 	.nEntitleDays = .nEntitleHH / .nHRSPDY
 endif 
 
+*** Entitlement adjustment between 
+* regular and calculated. 
+if .nCalculatedBankDeposit > 0 and ;
+	.nCalculatedBankDeposit != .nRegularBankDeposit
+
+	.nENTAdjHH = .nCalculatedBankDeposit - .nRegularBankDeposit
+	if (.nHRSPDY != 0  and .nENTAdjHH != 0)
+		.nENTAdjDays = .nENTAdjHH / .nHRSPDY
+	endif 	
+endif 
+
 return
 endproc
 
 *=========================================================
-protected procedure GetSickDays_MALATT()
+protected procedure GetMethod_MALATT()
 *** Gets the current year's number of sick days, 
 * to which an employee is entitled, maximum 10 
 * (+/-) 4 waiting period in days 
 *
 
-*** set step on 
-*** Add the days worked from timesheet 
-*** Total days worked are populated by the timesheet  
-.nTotDaysWorked = .nTotDaysWorked + .nTSWorkedDays 
-
-if .nTotDaysWorked = 0
-	this.WriteLog("GetSickDays_MALATT() - " + ;
-			"nTotDaysWorked = " + transform(.nTotDaysWorked))
-	return 
-endif 	
-
 *** Verify that the yearly entitlment has been completed.
 if .dTSStartDt > .dEndDt
-	this.WriteLog("GetSickDays_MALSEB() - " + ;
+	this.WriteLog("GetMethod_MALATT() - " + ;
 		"The entitlement has not been rolled over!")
 
 	.cERROR = "The entitlement has not been rolled over!"
 endif 
 
+*** set step on 
+*** Sick bank should not take the previous year hours  
+*** Total days worked are populated by the timesheet  
+.nTotDaysWorked = .nTotDaysWorked + .nTSWorkedDays 
+.nTotHoursWorked = .nTotDaysWorked *.nHRSPDY
+
+if .nTotDaysWorked = 0
+	.cERROR="nTotDaysWorked = "+transform(.nTotDaysWorked)
+	.cBatchNo = "MALATT-ON HOLD"
+
+	this.SpoolObjectProperties(this.oRS)
+	return 
+endif 	
+
 *** Get the MAX number of working days per union  
 if .nTotDaysWorked > this.nATT_DAYSWKPERYEAR
 	.nMAXDaysWorked = this.nATT_DAYSWKPERYEAR
+
 	.nTotDaysWorked = .nMAXDaysWorked 
+	.nTotHoursWorked = .nTotDaysWorked *.nHRSPDY
 endif 	
 
+*** Add scheduled hours to work by pay period 
+.nWorkDPY = this.nATT_DAYSWKPERYEAR
+.nEntitleDPY = this.nMALATT_SICKDAYSPERYEAR
+this.GetScheduleToWorkByPayPeriod( ;
+	this.nMALATT_SICKDAYSPERYEAR,this.nATT_DAYSWKPERYEAR)
+
 *** 10 sick days / 260 days per year 
-.nYTDSickDays=(this.nMALATT_SICKDAYSPERYEAR/this.nATT_DAYSWKPERYEAR)*;
-			.nTotDaysWorked
+.nYTDSickDays = this.nMALATT_SICKDAYSPERYEAR / ;
+		this.nATT_DAYSWKPERYEAR*.nTotDaysWorked
 
 *** Sum up the totals  
 .nTotSickDays = .nYTDSickDays
 .nTotSickHH = this.ConvertTimeBankUnit(.nTotSickDays)
 
+*** Do not allow more than maximum 
+if round((.nTotSickHH-.nYTDBankDeposit),4) > round(.nRegularBankDeposit,4)
+	.nCalculatedBankDeposit = .nTotSickHH 
+	.nTotSickHH = (.nYTDBankDeposit+.nRegularBankDeposit)
+endif 	
+
 *** Entitlement Year Yo Date - real time 
 .nEntitleHH = (.nTotSickHH - .nYTDBankDeposit)
 if (.nHRSPDY != 0)
 	.nEntitleDays = .nEntitleHH / .nHRSPDY
 endif 
 
+*** Entitlement adjustment between 
+* regular and calculated. 
+if .nCalculatedBankDeposit > 0 and ;
+	.nCalculatedBankDeposit != .nRegularBankDeposit
+
+	.nENTAdjHH = .nCalculatedBankDeposit - .nRegularBankDeposit
+	if (.nHRSPDY != 0 and .nENTAdjHH != 0)
+		.nENTAdjDays = .nENTAdjHH / .nHRSPDY
+	endif 	
+endif 
+
 return
 endproc
 
 *=========================================================
-protected procedure GetSickDays_MALAPMCP()
+protected procedure GetMethod_MALAPMCP()
 *** Gets the current year's number of sick days, 
 * to which an employee is entitled, maximum 10 
 * (+/-) 4 waiting period in days 
 * APMCP ratio (5/248.6) ~ .0201126307320998
 *
-
-*** Add the days worked from timesheet 
-.nTotDaysWorked = .nTotDaysWorked + .nTSWorkedDays 
-
-if .nTotDaysWorked = 0
-	this.WriteLog("GetSickDays_MALAPMCP() - " + ;
-			"nTotDaysWorked = " + transform(.nTotDaysWorked))
-	return 
-endif 	
-
 *** Verify that the yearly entitlment has been completed.
 if .dTSStartDt > .dEndDt
-	this.WriteLog("GetSickDays_MALAPMCP() - " + ;
+	this.WriteLog("GetMethod_MALAPMCP() - " + ;
 		"The entitlement has not been rolled over!")
 
 	.cERROR = "The entitlement has not been rolled over!"
 endif 
 
+*** Sick bank should not take the previous year hours  
+*** Total days worked are populated by the timesheet  
+.nTotDaysWorked = .nTotDaysWorked + .nTSWorkedDays 
+.nTotHoursWorked = .nTotDaysWorked *.nHRSPDY
+
+if .nTotDaysWorked = 0
+	.cERROR="nTotDaysWorked = "+transform(.nTotDaysWorked)
+	.cBatchNo = "MALAPMCP-ON HOLD"
+
+	this.SpoolObjectProperties(this.oRS)
+	return 
+endif 	
+
 *** Get the MAX number of working days per union  
 if .nTotDaysWorked > this.nAPMCP_DAYSWKPERYEAR
 	.nMAXDaysWorked = this.nAPMCP_DAYSWKPERYEAR
+
 	.nTotDaysWorked = .nMAXDaysWorked 
+	.nTotHoursWorked = .nTotDaysWorked *.nHRSPDY
 endif 	
+
+*** Add scheduled hours to work by pay period 
+.nWorkDPY = this.nAPMCP_DAYSWKPERYEAR
+.nEntitleDPY = this.nMALAPMCP_SICKDAYSPERYEAR
+this.GetScheduleToWorkByPayPeriod( ;
+	this.nMALAPMCP_SICKDAYSPERYEAR,this.nAPMCP_DAYSWKPERYEAR)
 
 *** 5 sick days / 248.60 days per year 
 .nYTDSickDays=(this.nMALAPMCP_SICKDAYSPERYEAR / ;
@@ -706,31 +838,48 @@ endif
 .nTotSickDays = .nYTDSickDays
 .nTotSickHH = this.ConvertTimeBankUnit(.nTotSickDays)
 
+*** Do not allow more than maximum 
+if round((.nTotSickHH-.nYTDBankDeposit),4) > round(.nRegularBankDeposit,4)
+	.nCalculatedBankDeposit = .nTotSickHH 
+	.nTotSickHH = (.nYTDBankDeposit+.nRegularBankDeposit)
+endif 	
+
 *** Entitlement Year Yo Date - real time 
 .nEntitleHH = (.nTotSickHH - .nYTDBankDeposit)
 if (.nHRSPDY != 0)
 	.nEntitleDays = .nEntitleHH / .nHRSPDY
 endif 
 
+*** Entitlement adjustment between 
+* regular and calculated. 
+if .nCalculatedBankDeposit > 0 and ;
+	.nCalculatedBankDeposit != .nRegularBankDeposit
+
+	.nENTAdjHH = .nCalculatedBankDeposit - .nRegularBankDeposit
+	if (.nHRSPDY != 0 and .nENTAdjHH != 0)
+		.nENTAdjDays = .nENTAdjHH / .nHRSPDY
+	endif 	
+endif 
+
 return
 endproc
 
 *=========================================================
-protected procedure GetSickDays_MALGOUV()
+protected procedure GetMethod_MALGOUV()
 *** Gets the current year's number of sick days, 
 * to which an employee is entitled, maximum 12 
 * (+/-) 4 waiting period in days 
 * Assign 1 day for every >= 1/2 month of service 
 *
 if .nFullMonthOfService = 0
-	this.WriteLog("GetSickDays_MALGOUV() - " + ;
+	this.WriteLog("GetMethod_MALGOUV() - " + ;
 		"nFullMonthOfService="+transform(.nFullMonthOfService))
-	return 
 endif 
 
-*** Verify that the yearly entitlment has been completed.
-if .dTSStartDt > .dEndDt
-	this.WriteLog("GetSickDays_MALGOUV() - " + ;
+*** The timesheet start date over the end date of the plan 
+* and timesheet end date less than the start date of the plan 
+if .dTSStartDt > .dEndDt 
+	this.WriteLog("GetMethod_MALGOUV() - " + ;
 		"The entitlement has not been rolled over!")
 
 	.cERROR = "The entitlement has not been rolled over!"
@@ -742,9 +891,19 @@ endif
 
 *** Entitlement Year Yo Date - real time 
 .nEntitleHH = (.nTotSickHH - .nYTDBankDeposit)
-if (.nHRSPDY != 0)
+.nENTAdjHH = .nEntitleHH - .nRegularBankDeposit
+if (.nHRSPDY != 0 and .nENTAdjHH != 0)
 	.nEntitleDays = .nEntitleHH / .nHRSPDY
+	.nENTAdjDays = .nENTAdjHH / .nHRSPDY
 endif 
+
+.nWorkDPY = this.nAPMCP_DAYSWKPERYEAR
+.nEntitleDPY = this.nGOUV_SICKDAYSPERYEAR
+*** Add scheduled hours to work by pay period 
+.nRegularBankDeposit = ;
+		iif((.cBankUnit="H"),.nEntitleHH,.nEntitleDays)
+this.GetScheduleToWorkByPayPeriod( ;
+	.nRegularBankDeposit, this.nGOUV_SICKDAYSPERYEAR)
 
 return
 endproc
@@ -752,76 +911,174 @@ endproc
 *=========================================================
 #define GET_MOBILE_DAYS_BY_PLAN 
 *=========================================================
-protected procedure GetSickDays_MOBSEB()
+protected procedure GetMethod_MOBSEB()
 *** Gets the current year's number of mobile days, 
 * to which an employee is entitled, maximum 6  
 *
+*** Verify that the yearly entitlment has been completed.
+if .dTSStartDt > .dEndDt
+	this.WriteLog("GetMethod_MALATT() - " + ;
+		"The entitlement has not been rolled over!")
+
+	.cERROR = "The entitlement has not been rolled over!"
+endif 
+
 *** Add the days worked from timesheet 
 .nTotDaysWorked = .nTotDaysWorked + .nTSWorkedDays 
+.nTotHoursWorked = .nTotDaysWorked *.nHRSPDY
 
 if .nTotDaysWorked = 0
-	this.WriteLog("GetSickDays_MOBSEB() - " + ;
-			"nTotDaysWorked = " + transform(.nTotDaysWorked))
+	.cERROR="nTotDaysWorked = "+transform(.nTotDaysWorked)
+	.cBatchNo = "MOBSEB-ON HOLD"
+
+	this.SpoolObjectProperties(this.oRS)
 	return 
 endif 	
 
 *** Get the MAX number of working days per union  
 if .nTotDaysWorked > this.nSEB_DAYSWKPERYEAR
 	.nMAXDaysWorked = this.nSEB_DAYSWKPERYEAR
+
 	.nTotDaysWorked = .nMAXDaysWorked 
+	.nTotHoursWorked = .nTotDaysWorked *.nHRSPDY
 endif 	
 
+*** Add scheduled hours to work by pay period 
+.nWorkDPY = this.nSEB_DAYSWKPERYEAR
+.nEntitleDPY = this.nMOBSEB_MOBILEDAYSPERYEAR
+this.GetScheduleToWorkByPayPeriod( ;
+	this.nMOBSEB_MOBILEDAYSPERYEAR,this.nSEB_DAYSWKPERYEAR)
+
 *** 6 sick days / 260 days per year 
-.nYTDSickDays=(this.nMOBSEB_MOBILEDAYSPERYEAR/this.nSEB_DAYSWKPERYEAR)*;
-			.nTotDaysWorked 
+.nYTDSickDays = (this.nMOBSEB_MOBILEDAYSPERYEAR / ;
+		this.nSEB_DAYSWKPERYEAR) * .nTotDaysWorked 
 
 *** Sum up the totals  
 .nTotSickDays = .nYTDSickDays
 .nTotSickHH = this.ConvertTimeBankUnit(.nTotSickDays)
 
+*** Do not allow more than maximum 
+if round((.nTotSickHH-.nYTDBankDeposit),4) > round(.nRegularBankDeposit,4)
+	.nCalculatedBankDeposit = .nTotSickHH 
+	.nTotSickHH = (.nYTDBankDeposit+.nRegularBankDeposit)
+endif 	
+
 *** Entitlement Year Yo Date - real time 
 .nEntitleHH = (.nTotSickHH - .nYTDBankDeposit)
 if (.nHRSPDY != 0)
 	.nEntitleDays = .nEntitleHH / .nHRSPDY
+endif 
+
+*** Entitlement adjustment between 
+* regular and calculated. 
+if .nCalculatedBankDeposit > 0 and ;
+	.nCalculatedBankDeposit != .nRegularBankDeposit
+
+	.nENTAdjHH = .nCalculatedBankDeposit - .nRegularBankDeposit
+	if (.nHRSPDY != 0 and .nENTAdjHH != 0)
+		.nENTAdjDays = .nENTAdjHH / .nHRSPDY
+	endif 	
 endif 
 
 return
 endproc
 
 *=========================================================
-protected procedure GetSickDays_MOBATT()
+protected procedure GetMethod_MOBATT()
 *** Gets the current year's number of mobile days, 
 * to which an employee is entitled, maximum 6  
 *
+*** Verify that the yearly entitlment has been completed.
+if .dTSStartDt > .dEndDt
+	this.WriteLog("GetMethod_MOBATT() - " + ;
+		"The entitlement has not been rolled over!")
+
+	.cERROR = "The entitlement has not been rolled over!"
+endif 
 
 *** Add the days worked from timesheet 
 .nTotDaysWorked = .nTotDaysWorked + .nTSWorkedDays 
+.nTotHoursWorked = .nTotDaysWorked *.nHRSPDY
 
 if .nTotDaysWorked = 0
-	this.WriteLog("GetSickDays_MOBSEB() - " + ;
-			"nTotDaysWorked = " + transform(.nTotDaysWorked))
+	.cERROR="nTotDaysWorked = "+transform(.nTotDaysWorked)
+	.cBatchNo = "MOBATT-ON HOLD"
+
+	this.SpoolObjectProperties(this.oRS)
 	return 
 endif 	
 
 *** Get the MAX number of working days per union  
 if .nTotDaysWorked > this.nSEB_DAYSWKPERYEAR
 	.nMAXDaysWorked = this.nSEB_DAYSWKPERYEAR
+
 	.nTotDaysWorked = .nMAXDaysWorked 
+	.nTotHoursWorked = .nTotDaysWorked *.nHRSPDY
 endif 	
 
+*** Add scheduled hours to work by pay period 
+.nWorkDPY = this.nSEB_DAYSWKPERYEAR
+.nEntitleDPY = this.nMOBSEB_MOBILEDAYSPERYEAR
+this.GetScheduleToWorkByPayPeriod( ;
+	this.nMOBSEB_MOBILEDAYSPERYEAR,this.nSEB_DAYSWKPERYEAR)
+
 *** 6 sick days / 260 days per year 
-.nYTDSickDays=(this.nMOBSEB_MOBILEDAYSPERYEAR / ;
-		this.nSEB_DAYSWKPERYEAR)*.nTotDaysWorked 
+.nYTDSickDays = this.nMOBSEB_MOBILEDAYSPERYEAR / ;
+		this.nSEB_DAYSWKPERYEAR * .nTotDaysWorked 
 
 *** Sum up the totals  
 .nTotSickDays = .nYTDSickDays
 .nTotSickHH = this.ConvertTimeBankUnit(.nTotSickDays)
+
+*** Do not allow more than maximum 
+if round((.nTotSickHH-.nYTDBankDeposit),4) > round(.nRegularBankDeposit,4)
+	.nCalculatedBankDeposit = .nTotSickHH 
+	.nTotSickHH = (.nYTDBankDeposit+.nRegularBankDeposit)
+endif 	
 
 *** Entitlement Year Yo Date - real time 
 .nEntitleHH = (.nTotSickHH - .nYTDBankDeposit)
 if (.nHRSPDY != 0)
 	.nEntitleDays = .nEntitleHH / .nHRSPDY
 endif 
+
+*** Entitlement adjustment between 
+* regular and calculated. 
+if .nCalculatedBankDeposit > 0 and ;
+	.nCalculatedBankDeposit != .nRegularBankDeposit
+
+	.nENTAdjHH = .nCalculatedBankDeposit - .nRegularBankDeposit
+	if (.nHRSPDY != 0 and .nENTAdjHH != 0)
+		.nENTAdjDays = .nENTAdjHH / .nHRSPDY
+	endif 	
+endif 
+
+return
+endproc
+
+*=========================================================
+#define GET_OVERTIME_BY_PLAN 
+*=========================================================
+protected procedure GetMethod_TSSEB()
+*** Gets the current year's number of overtime days, 
+* to which an employee is entitled, maximum 5. 
+* TSSEB ratio (5/260) 
+*
+* OVERTIME - too complicated the client will handle manually 
+*
+
+return
+endproc
+
+*=========================================================
+protected procedure GetMethod_TSAPMCP()
+*** Gets the current year's number of overtime days, 
+* to which an employee is entitled, maximum 5. 
+* APMCP ratio (5/248.6) ~ .0201126307320998
+*
+*
+* OVERTIME - too complicated the client will handle manually 
+*
 
 return
 endproc
@@ -829,23 +1086,34 @@ endproc
 *=========================================================
 #define GET_COMPENSATORY_TIME_DAYS_BY_PLAN 
 *=========================================================
-protected procedure GetSickDays_RECAPMCP()
+protected procedure GetMethod_RECAPMCP()
 *** Gets the current year's number of days, 
 * of compensatory time to which an employee is 
 * yearly entitled, maximum 5.  
 *
+*** Verify that the yearly entitlment has been completed.
+if .dTSStartDt > .dEndDt
+	this.WriteLog("GetMethod_RECAPMCP() - " + ;
+		"The entitlement has not been rolled over!")
+
+	.cERROR = "The entitlement has not been rolled over!"
+endif 
+
 *** Add the days worked from timesheet 
 .nTotDaysWorked = .nTotDaysWorked + .nTSWorkedDays 
+.nTotHoursWorked = .nTotDaysWorked *.nHRSPDY
 
 *** set step on 
 if .nTotDaysWorked = 0
-	this.WriteLog("GetSickDays_RECAPMCP() - " + ;
-			"nTotDaysWorked = " + transform(.nTotDaysWorked))
+	.cERROR="nTotDaysWorked = "+transform(.nTotDaysWorked)
+	.cBatchNo = "RECAPMCP-ON HOLD"
+
+	this.SpoolObjectProperties(this.oRS)
 	return 
 endif 	
 
 if .dOriginalHiredDt < this.nRECAPMCP_STARTDATE
-	this.WriteLog("GetSickDays_RECAPMCP() - " + ;
+	this.WriteLog("GetMethod_RECAPMCP() - " + ;
 			"nRECAPMCP_STARTDATE = " + ;
 			transform(this.nRECAPMCP_STARTDATE))
 	return 
@@ -854,16 +1122,31 @@ endif
 *** Get the MAX number of working days per union  
 if .nTotDaysWorked > this.nAPMCP_DAYSWKPERYEAR
 	.nMAXDaysWorked = this.nAPMCP_DAYSWKPERYEAR
+
 	.nTotDaysWorked = .nMAXDaysWorked 
+	.nTotHoursWorked = .nTotDaysWorked *.nHRSPDY
 endif 	
 
+*** Add scheduled hours to work by pay period 
+.nWorkDPY = this.nAPMCP_DAYSWKPERYEAR
+.nEntitleDPY = .nRECAPMCP_DPY
+
+this.GetScheduleToWorkByPayPeriod( ;
+	.nRECAPMCP_DPY,this.nAPMCP_DAYSWKPERYEAR)
+
 *** 5 sick days / 260 days per year 
-.nYTDSickDays=(.nRECAPMCP_DPY/this.nAPMCP_DAYSWKPERYEAR)*;
-			.nTotDaysWorked 
+.nYTDSickDays = .nRECAPMCP_DPY / ;
+		this.nAPMCP_DAYSWKPERYEAR * .nTotDaysWorked 
 
 *** Sum up the totals  
 .nTotSickDays = .nYTDSickDays
 .nTotSickHH = this.ConvertTimeBankUnit(.nTotSickDays)
+
+*** Do not allow more than maximum 
+if round((.nTotSickHH-.nYTDBankDeposit),4) > round(.nRegularBankDeposit,4)
+	.nCalculatedBankDeposit = .nTotSickHH 
+	.nTotSickHH = (.nYTDBankDeposit+.nRegularBankDeposit)
+endif 	
 
 *** Entitlement Year Yo Date - real time 
 .nEntitleHH = (.nTotSickHH - .nYTDBankDeposit)
@@ -871,18 +1154,19 @@ if (.nHRSPDY != 0)
 	.nEntitleDays = .nEntitleHH / .nHRSPDY
 endif 
 
+*** Entitlement adjustment between 
+* regular and calculated. 
+if .nCalculatedBankDeposit > 0 and ;
+	.nCalculatedBankDeposit != .nRegularBankDeposit
+
+	.nENTAdjHH = .nCalculatedBankDeposit - .nRegularBankDeposit
+	if (.nHRSPDY != 0 and .nENTAdjHH != 0)
+		.nENTAdjDays = .nENTAdjHH / .nHRSPDY
+	endif 	
+endif 
+
 return
 endproc
-
-*=========================================================
-#define GET_FLEXIBLE_DAYS_BY_PLAN 
-*=========================================================
-protected procedure GetSickDays_FLEX()
-
-
-
-
-return 
 
 *=========================================================
 #define HELPER_METHODS 
@@ -1018,6 +1302,8 @@ addproperty(loR, "cSchedId", "")
 *** Seniority 
 addproperty(loR, "nSenMths", 0)
 addproperty(loR, "nSenYears", 0)
+addproperty(loR, "nGTSenMths", 0)
+addproperty(loR, "nGTSenYears", 0)
 
 *** Counter for transactions 
 addproperty(loR, "cTCNT", "")
@@ -1038,6 +1324,8 @@ addproperty(loR, "cPayGRP", "")
 addproperty(loR, "dPayPeriodStartDt", {})
 addproperty(loR, "dPayPeriodEndDt", {})
 addproperty(loR, "cPayCycle", "")
+addproperty(loR, "cPayNo", "")
+addproperty(loR, "nSFPQPayNo", 0)
 addproperty(loR, "IsThe2ndPay", .f.)
 
 *** Month To Date (MTD)
@@ -1055,8 +1343,10 @@ addproperty(loR, "dOriginalHiredDt", {})
 addproperty(loR, "nHRSPDY", 0)
 addproperty(loR, "nSchedDaysWkByPayPeriod", 0)
 addproperty(loR, "nSchedHoursWkByPayPeriod", 0)
+addproperty(loR, "nSchedHolidays", 0)
 addproperty(loR, "nRegularBankDeposit", 0)
 addproperty(loR, "nCalculatedBankDeposit", 0)
+addproperty(loR, "cCustomBankDeposit", "")
 
 *** Bank unit 
 addproperty(loR, "cBankUnit", "")
@@ -1066,10 +1356,23 @@ addproperty(loR, "nTotSickDays", 0)
 addproperty(loR, "nTotSickHH", 0)
 addproperty(loR, "nYTDSickDays", 0)
 addproperty(loR, "nYTDSickHH", 0)
+addproperty(loR, "nYTDVacDays", 0)
+addproperty(loR, "nYTDVacHH", 0)
+addproperty(loR, "nTotVacDays", 0)
+addproperty(loR, "nTotVacHH", 0)
 
 *** Employee entitlement 
 addproperty(loR, "nEntitleDays", 0)
 addproperty(loR, "nEntitleHH", 0)
+addproperty(loR, "nENTAdjDays", 0)
+addproperty(loR, "nENTAdjHH", 0)
+
+*** Custom fields by Union 
+*** APMCP & GOVT  
+addproperty(loR, "nAPTotVacDays", 0)
+addproperty(loR, "nAPTotVacHH", 0)
+addproperty(loR, "nGTTotVacDays", 0)
+addproperty(loR, "nGTTotVacHH", 0)
 
 *** Timesheet posting parameters  
 addproperty(loR, "IsTSRealTime", .f.)
@@ -1088,13 +1391,33 @@ addproperty(loR, "nYTDBankDeposit", 0)
 
 **** ERROR Handler 
 addproperty(loR, "cERROR", "")
+addproperty(loR, "cBatchNo", "")
+
+**** FMS & Vacation rules tables 
+addproperty(loR, "cTABLE", "")
+
+**** Rules
+addproperty(loR, "nWorkDPY", 0)
+addproperty(loR, "nEntitleDPY", 0)
+
+*** Vacation rule matrix 
+addproperty(loR, "cRuleMatrix", "")
+addproperty(loR, "nMatrixRecNo", 0)
 
 return loR
 
 *=========================================================
 procedure SpoolObjectProperties(toR As Object)
 *** S.G. - Logs all object properies 
-local lcAsisField
+local lcAsisField, lcMemo, loCursor
+local lcUNIQID, lcDBF, lcKEY, lcAction
+local lcOLDUSER, lcNEWUSER, ltOLDDTM, lcOLDPERS
+local lcNEWPERS
+
+store "" to lcMemo, lcMemoT, lcUNIQID, lcDBF, lcKEY 
+store "" to lcAction, lcOLDUSER, lcNEWUSER, lcNEWPERS
+store {} to ltOLDDTM
+store null to loCursor
 
 if isnull(toR)
 	return 
@@ -1106,14 +1429,52 @@ if !._DEBUG or empty(.cLogPath)
 	return 
 endif 
 
-.WriteLog(" ... " + CRLF)
 =amembers(gaRS, toR, 1)
 for lnN = 1 to alen(gaRS, 1)
-	lcAsisField = "toR." + trim(gaRS[lnN, 1])
-	.WriteLog("SpoolObjectProperties() :: " + ;
-		trim(lcAsisField) + " = " + ;
-		transform(evaluate(lcAsisField)))
+	lcAsisField = "toR." + alltrim(gaRS[lnN, 1])
+	lcMemo = lcMemo + ;
+			trim(lcAsisField) + "=" + ;
+			transform(evaluate(lcAsisField))+CRLF 
 next 
+
+*** set step on 
+if !empty(lcMemo)
+	lcMemo = strtran(lcMemo, "'", "''")
+
+	lcUNIQID = uniqid()
+	lcDBF = "TIMETMP"
+	lcKEY = nvl(toR.cBatchNo, "")
+	lcAction = "P" 
+	lcOLDUSER = lstr(gnMyPersId)
+	lcNEWUSER = name(gnMyPersId)
+	lcOLDPERS = lstr(toR.nPersId,0)
+	ltOLDDTM = datetime()
+	lcNEWPERS = nvl(toR.cBankId, "")
+
+	text to lcSql textmerge noshow pretext 1+4 
+		insert into Audite ( 
+				AU_DBF, AU_KEY, AU_ACTION, 
+				AU_OLDUSER, AU_OLDDTM, AU_OLDPERS, 
+				AU_OLDVAL, AU_NEWUSER, AU_NEWDTM, 
+				AU_NEWPERS, AU_NEWVAL, AU_UNIQID, AU_DATE)
+		values 
+				('<<lcDBF>>', '<<lcKEY>>', '<<lcAction>>', 
+					'<<lcOLDUSER>>', '<<ltOLDDTM>>', '<<lcOLDPERS>>', 
+					'<<lcMemo>>', '<<lcNEWUSER>>', '<<ltOLDDTM>>', 
+					'<<lcNEWPERS>>', '<<lcMemoT>>', '<<lcUNIQID>>', '<<ltOLDDTM>>')
+	endtext 
+
+	*** Pass trough SQL 
+	loCursor = goDatamgr.SQLexec("", ;
+			set("datasession"),goDataMgr.ConnectionHandle,;
+			lcSql)
+
+	if isnull(loCursor)
+		return 
+	endif 	
+endif 
+
+store null to loCursor
 endwith 
 
 return 

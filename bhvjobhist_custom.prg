@@ -29,6 +29,98 @@
 *** Properties:
 nTAnnual=0.0 
 
+
+*==========================================================
+*** HOT FIX - Avoid updating the client - S.G.
+*==========================================================
+procedure GetTotalHours(pcSwitches, ;
+				pnPersid, pdFrom, pdThru)
+*** Like the same method in bizSched, but received a persid.
+*   Dates are REQUIRED. INcludes both start and end dates.
+
+*** pcSwitches:
+*		/HOURS (Default) or /FHOURS or /PDHOURS
+*     /INCLINAC, /INCLLTD or /INCLALD
+*   Switches are passed directly to bizSched.GetTotalHours().
+
+local loCursor, ldDate, ldStart, lnN, lnSelect, lnDays, lnHours, lnTotal
+local lcSchedid, llInclInac, llInclLtd
+
+if empty(pdFrom) or empty(pdThru) or pdFrom > pdThru
+	return 0
+endif
+
+pcSwitches = iif(vartype(pcSwitches)="C", upper(pcSwitches), "")
+llInclInac = "/INCLINAC" $ pcSwitches
+llInclLTD = "/INCLLTD" $ pcSwitches or "/INCLALD" $ pcSwitches
+
+lnSelect = select()
+loCursor = this.GetByPersid("/cursor", ;
+				"H_PERSID, H_EFFDT, H_ENDDT, H_SCHEDID, H_JSTAT, H_HRSPER", ;
+				pnPersid, ;
+				pdFrom, pdThru, "H_EFFDT<>H_ENDDT")
+go top
+if eof()
+	select (lnSelect)
+	return 0
+endif
+
+*** Initialize loop
+lnTotal = 0
+ldStart = todate(pdFrom)
+lnDays = todate(pdThru) - ldStart
+for lnN = 0 to lnDays
+	ldDate = ldStart + lnN
+	if ldDate < H_EFFDT
+		*** Before first record
+		ldDate = todate(H_EFFDT)
+		if ldDate > pdThru
+			exit
+		else
+			*-- Skip directly to first date and continue
+			lnN = todate(H_EFFDT) - ldStart
+		endif
+	endif
+	if H_ENDDT <> {} and H_ENDDT <= lddate
+		locate rest for H_ENDDT = {} or H_ENDDT > ldDate
+		if eof()
+			*** Should not happen.
+			loop
+		endif
+	endif
+
+	if H_JSTAT <> C_JSEMPL and ;
+			not (H_JSTAT = "INAC" and llInclInac) and ;
+			not (inlist(H_JSTAT,"LTD","ALD") and llInclLTD)
+		*** Terminated or bad status
+		if H_ENDDT = {}
+			exit
+		else
+			loop
+		endif
+	endif
+
+	*** Get Sched
+	lcSchedid = trim(H_SCHEDID)
+	if lcSchedid = ""
+		*** For weekdays use H_HRSPER / 5
+		*-- Could do much more efficiently, but normally this
+		*   is only used for a small time interval
+		lnHours = iif(between(dow(ldDate), 2, 6), H_HRSPER / 5, 0)
+	else
+		if isnull(this.oBizSched)
+			this.oBizSched = this.oBizMgr.GetBiz("SCHED")
+		endif
+		lnHours = this.oBizSched.GetTotalHours(pcSwitches, ;
+					lcSchedid, ldDate, ldDate)
+	endif
+	lnTotal = lnTotal + lnHours 
+endfor
+
+loCursor = null
+select (lnSelect)
+return round(lnTotal, 2)
+
 *========================================================
 procedure Init(toThisform, tcSubType, tcInitialKey)
 *
@@ -44,7 +136,7 @@ procedure LoadGvtSalaryOntoForm()
 * The 3rd party salary info comes from H__OANNAUL field 
 * and it is handle in the cursor qJobhist.
 * 
-if !used("vJobhist")
+if !used("vJobhist") or reccount("vJobhist")<=0 
 	return 
 endif 
 
@@ -59,6 +151,11 @@ select H_PERSID,H_EFFDT,H_ONDATE,H_UNIQID, ;
 		 	00000000000.00 as vvOANNUAL ;
 from vJobHist readwrite ;
 Into cursor qJobhist
+
+if reccount("qJobhist")<=0
+	select(lnSelect)
+	return 
+endif 
 
 select qJobHist
 index on iif(empty(H_ONDATE), "99999999", dtos(H_ONDATE)) + ;
@@ -76,7 +173,8 @@ scan
 	endif 
 	
 	select vJobHist 
-	this.nTAnnual= vJobhist.vvAnnual + qJobhist.vvOAnnual
+	this.nTAnnual= nvl(vJobhist.vvAnnual,0) + ;
+			nvl(qJobhist.vvOAnnual, 0)
 endscan 
 
 if (lnRecordNo > 0 or lnRecordNo = -1)
@@ -111,6 +209,10 @@ return
 procedure BeforeRefresh()
 
 dodefault()
+
+if !used("qJobhist") 
+	return
+endif 
 this.nTAnnual= vJobhist.vvAnnual + qJobhist.vvOAnnual
 
 return 
@@ -120,6 +222,10 @@ procedure AfterCancel()
 *** Position the record into qJobhist
 *
 dodefault()
+
+if !used("vJobhist") or reccount("vJobhist")=0
+	return 
+endif 
 
 this.LoadGvtSalaryOntoForm()
 
@@ -137,6 +243,10 @@ dodefault()
 
 this.LoadGvtSalaryOntoForm()
 
+if !used("vJobhist") or reccount("vJobhist")=0
+	return 
+endif 
+
 =seek(dtos(vJobhist.H_ONDATE) + dtos(vJobhist.H_EFFDT) + ;
 		vJobhist.H_UNIQID, "qJobhist", "TUNIQ" )
 
@@ -146,6 +256,10 @@ return
 procedure Flush()
 
 dodefault()
+
+if !used("qJobhist") 
+	return
+endif 
 
 this.SaveGovntSalaryFromForm()
 return
@@ -288,170 +402,6 @@ return
 endproc
 
 
-*!*	*========================================================
-*!*	procedure ValSal (pcFLDNAME)
-*!*	*** Called by COMPSALARY above and from DEFAULTS routines
-*!*	*** Validates salary, unit rate, etc. against RPLAN and RATE.
-*!*	*** Returns .f. if hard error.
-
-*!*	set step on 
-
-*!*	*** Make sure JOB is current
-*!*	if !inlist(vJobhist.H_JOBID, vJob.J_JOBID, "", "*")
-*!*		*** Requery .oJob
-*!*		this.oDset.oJob = null
-*!*		this.oDset.oJob = this.oBizJob.GetByID("/cursor=vjob", ;
-*!*						"", vJobhist.H_JOBID)
-*!*		select vJobhist
-*!*	endif
-
-*!*	private lcCalcFld 	&& Name of field to which limits apply
-*!*	*		SALARY, UNITRATE, ANNUAL, ANNUALFT
-*!*	private lnValue, lnPrevValue			&& Not local!
-*!*	private lnMinVal, lnMaxVal, lnSuggVal
-*!*	** Don't hide VV* or H_*
-*!*	local llHard		&& Is this a hard error? (not just a warning)
-*!*	local lcMsg, loMsgMark
-
-*!*	*** Get max, min, etc.
-*!*	this.GetRates ("/REEVAL")
-
-*!*	*** Pick up these already stored as properties
-*!*	llHard = this.RateHardErr and !vJobhist.H_RedCirc
-*!*	lcCalcFld = this.oThisForm.CalcFld
-*!*	lnMinVal = this.oThisform.MinVal
-*!*	lnMaxVal = this.oThisform.MaxVal
-*!*	lnSuggVal = this.oThisform.SuggVal
-
-*!*	if empty(lcCalcFld) and lnMaxVal = 0 and lnMinVal = 0
-*!*		*** Nothing to do
-*!*		select vJobhist
-*!*		return
-*!*	endif
-
-*!*	if ! "S" $ this.MCapabil ;
-*!*	and (! llHard or lnSuggVal = 0)
-*!*		*** No access to salaries
-*!*		return
-*!*	endif
-
-*!*	select vJobhist
-
-*!*	*** We are going to work with memvars, because if it is a
-*!*	*   hard error we don't want to change values.
-*!*	if empty(pcFldName) or type("m.vvSalary")<>"N"
-*!*		*** Load values to memvars
-*!*		scatter memvar fields ;
-*!*				vvUNITRATE, vvSALARY, vvANNUAL, vvAnnualFT, vvOthrate, ;
-*!*				H_PayFreq, H_HrsPer, H_PctTime, H_RedCirc
-*!*	endif
-
-*!*	lnPrevValue = oldval("VV" + lcCALCFLD, "vJobhist")
-*!*	if isnull(lnPrevValue) or lnPrevValue = 0
-*!*		lnPrevValue = evaluate("vv" + lcCalcFld)
-*!*	endif
-*!*	lnValue = eval("m.VV" + lcCALCFLD)
-*!*	lcMsgKey = ""
-
-*!*	do case
-*!*	*** Revised approach October 20, 2006.
-*!*	case lnSuggVal <> 0 and !m.H_REDCIRC ;
-*!*	 and lnMinVal = 0 and lnMaxVal = 0
-*!*		*** There is only a suggested salary (no min or max).  Use it.
-*!*		this.oThisform.lForceSalary = llHard
-
-*!*		store lnSuggVal to ("vv" + lcCalcFld)
-*!*		*** This will update the memvars
-*!*		this.oBizRemun.JHCALC (lcCalcFld, ;
-*!*						@m.vvUNITRATE, ;
-*!*						@m.vvSALARY, ;
-*!*						@m.vvANNUAL, ;
-*!*						@m.vvANNUALFT, ;
-*!*						m.H_PAYFREQ, ;
-*!*						m.H_HRSPER, ;
-*!*						m.H_PCTTIME, ;
-*!*						m.H_REDCIRC, ;
-*!*						"vJobhist")
-
-*!*		*** Round ANNUAL and ANNUALFT if necessary
-*!*		if len(vjobhist.H_ANNUAL) <= 10 ;
-*!*		or (type("C_RNDANNU1") = "L" and C_RNDANNU1)
-*!*			*-- TCG 2009-06-22 -- Round AnnualFT only.
-*!*			*   Keep full ANNUAL decimals in data base
-*!*	*		vvAnnual = round(m.vvAnnual,0)	&& Removed TCG 2009-06-22
-*!*			vvAnnualFt = round(m.vvAnnualFt,0)
-*!*		endif
-
-*!*		if lnPrevValue <> lnSuggVal
-*!*			*** Show info message the rate was changed
-*!*			lcFldName = goMsgMgr.GetText ("ZOO.JOBHIST.SALARY_FLD_NAME1")
-*!*			lcMsgKey = "ZOO.JOBHIST.SAL_CHANGED"
-*!*		endif
-
-*!*	case ! "S" $ this.MCapabil
-*!*		*** No access to salaries
-*!*		return
-
-*!*	case lnSUGGVAL <> 0
-*!*		this.oThisform.lForceSalary = .f.
-*!*		lcFldName = goMsgMgr.GetText ("ZOO.JOBHIST.SALARY_FLD_NAME1")
-*!*		if lnSuggVal <> lnValue
-*!*			lcMsgKey = "ZOO.JOBHIST.SAL_SUGGEST_" + ;
-*!*				iif(m.H_REDCIRC or between(lnValue, lnMinVal, lnMaxVal), ;
-*!*										"WARN", "ERROR")
-*!*		endif
-
-*!*	case lnValue < lnMINVAL
-*!*		this.oThisform.lForceSalary = .f.
-*!*		lcFldName = goMsgMgr.GetText ("ZOO.JOBHIST.SALARY_FLD_NAME1")
-*!*		lcMsgKey = "ZOO.JOBHIST.SAL_UNDER_MIN_" + ;
-*!*						iif(m.H_REDCIRC, "WARN", "ERROR")
-
-*!*	case lnValue > lnMAXVAL and lnMaxVal <> 0
-*!*		this.oThisform.lForceSalary = .f.
-*!*		lcFldName = goMsgMgr.GetText ("ZOO.JOBHIST.SALARY_FLD_NAME1")
-*!*		lcMsgKey = "ZOO.JOBHIST.SAL_OVER_MAX_" + ;
-*!*						iif(m.H_REDCIRC, "WARN", "ERROR")
-
-*!*	otherwise
-*!*		this.oThisform.lForceSalary = .f.
-*!*		loMsgMark = findobj(this.oThisform, "msgRemun")
-*!*		if !isnull(loMsgMark)
-*!*			*** Clear message in MsgMark
-*!*			loMsgMark.SetMsg ("")
-*!*		endif
-*!*		lcMsgKey = ""
-*!*	endcase
-
-*!*	*** Update cursor with calculated results
-*!*	*** Apply TRY/CATCH to prevent overflow, particularly on CompaNew.
-*!*	try
-*!*		gather memvar fields ;
-*!*				 vvUNITRATE, vvSALARY, vvANNUAL, vvAnnualFT
-*!*		replace vvComparat with this.oThisform.CompaNew
-*!*	catch
-*!*	endtry
-
-*!*	*** Show message
-*!*	do case
-*!*	case empty(lcMsgKey) or !"S" $ this.MCapabil
-*!*		*** Nothing to do
-*!*	case !empty(pcFldName) and ;
-*!*			inlist(pcFldName, "SALARY", "UNITRATE", "ANNUAL", "ANNUALFT")
-*!*		*** Show message immediately
-*!*		return !llHard or between(lnValue, lnMinVal, lnMaxVal)
-*!*	otherwise
-*!*		loMsgMark = findobj(this.oThisform, "msgRemun")
-*!*		if isnull(loMsgMark)
-*!*			*** Show message immediately
-*!*			return !llHard or between(lnValue, lnMinVal, lnMaxVal)
-*!*		else
-*!*			*** Put message into MsgMark
-*!*			loMsgMark.SetMsg (lcMsgKey)
-*!*		endif
-*!*	endcase
-
-*!*	return .t.
 
 enddefine
 *#########################################################

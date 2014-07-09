@@ -25,21 +25,29 @@ private llDEBUG
 
 local lcTBLTYPE, lcEXPENSE, lcPERSID, lcPRIMEID, lcSql
 local lcPERSID, lcEXPENSE, lcWhere_PERSID, lcWhere_PRIME
-local ldFrom, ldThru
-local lnResult
+local llcWhere_BATCH, ldFrom, ldThru
+local loCursor
 
 store "" to lcTBLTYPE, lcEXPENSE, lcPERSID, lcPRIMEID, lcSql
 store "" to lcPERSID, lcEXPENSE, lcWhere_PERSID, lcWhere_PRIME
+store "" to lcWhere_BATCH
 store {} to ldFrom, ldThru
+store null to loCursor
 
 llDEBUG = .t. 				&& Save the cursors to TEMP directory  
-lnResult = 0
 
 therm(.02)
 
+*** set step on 
 *** Default settings for expenses into TBL
 lcTBLTYPE= "PRIME"
 lcEXPENSE= "OUI"
+
+if type("OPTIONS[1]") <> "L"
+	dimension OPTIONS[3]
+	OPTIONS[2] = date()-6
+	OPTIONS[3] = date()
+endif
 
 *** Create report variables
 do AddRptVa with "ldAsOf", ;
@@ -48,12 +56,7 @@ do AddRptVa with "ldAsOf", ;
 lcAsof = tochar(ldAsOf, "/quotes")
 
 do AddRptVa with "ldFrom", OPTIONS[2]
-do AddRptVa with "ldThru", todate(OPTIONS[3])
-
-if type("OPTIONS[1]") <> "L"
-	dimension OPTIONS[3]
-	OPTIONS[3] = date()
-endif
+do AddRptVa with "ldThru", OPTIONS[3]
 
 *** Get the PERS ID's from selection  
 if (atw("inlist(pers.E_PERSID",lcSELECT) > 0)
@@ -64,6 +67,17 @@ if (atw("inlist(pers.E_PERSID",lcSELECT) > 0)
 	endif 
 endif 
 
+*** Called from timesheet 
+if empty(lcPERSID)
+	if (atw("TT_PERSID=",lcSELECT) > 0)
+		lcPERSID = EXTRACT(lcSELECT,"and TT_PERSID=", "")
+
+		if !empty(lcPERSID)
+			lcWhere_PERSID = "AND timetmp.TT_PERSID IN (" + lcPERSID + ")"
+		endif 
+	endif 
+endif 
+
 *** Get the PRIME ID's from selection  
 if (atw("inlist(timetmp.TT_OPT",lcSELECT) > 0)
 	lcPRIMEID = EXTRACT(lcSELECT,"inlist(timetmp.TT_OPT,", ")")
@@ -71,6 +85,12 @@ if (atw("inlist(timetmp.TT_OPT",lcSELECT) > 0)
 	if !empty(lcPRIMEID)
 		lcWhere_PRIME = "AND timetmp.TT_OPT IN (" + lcPRIMEID + ")"
 	endif 
+endif 
+
+*** Get the BATCH from selection  
+if type("OPTIONS[4]") = "C" ;
+and !empty(OPTIONS[4])
+	lcWhere_BATCH = "AND timetmp.TT_BATCH IN ('" + OPTIONS[4] + "')"
 endif 
 
 *** Get selection date
@@ -96,35 +116,40 @@ endif
 *** set step on 
 lcSql = strtran(lcSql, [PERSID_FILTER], lcWhere_PERSID)
 lcSql = strtran(lcSql, [PRIME_FILTER], lcWhere_PRIME)
+lcSql = strtran(lcSql, [BATCH_FILTER], lcWhere_BATCH)
 lcSql = strtran(lcSql, [FROMDT_FILTER], ;
 			iif(type("ldFrom")="D",dtoc(ldFrom),ldFrom))
 lcSql = strtran(lcSql, [THRUDT_FILTER], ;
 			iif(type("ldThru")="D",dtoc(ldThru),ldThru))
 
 *** Pass trough SQL 
-if goDataMgr.ConnectionHandle > 0 
-	lnResult = sqlexec(goDataMgr.ConnectionHandle, lcSql, "qTmpTBL")
-endif 
+loCursor = goDatamgr.SQLexec("/CURSOR=vTmpTBL", ;
+		set("datasession"), goDataMgr.ConnectionHandle, ;
+		lcSql)
 
-if lnResult < 1 
+if isnull(loCursor)
 	return 
 endif 
-
+	
+select * from vTmpTBL ;
+into cursor qTmpTBL readwrite 
+use in select("vTmpTBL")
+	
 *** set step on 
 select qTmpTBL
 go top in qTmpTBL 
-index on str(TT_PERSID,8)+dtoc(TT_EFFDT) tag TTBL1
+index on str(TT_PERSID,8)+dtoc(TT_EFFDT)+trim(TT_INOUT) tag TTBL1
 
-=CreatePIVOTTable(3, field(3))
-=FillPIVOTTable(field(3), field(4), field(5), field(6), field(7))
+=CreatePIVOTTable(4, field(4))
+=FillPIVOTTable(field(4),field(5),field(6),field(3),field(7),field(8))
 =ComputeTotals()
 =FillInTime()
-=FillInNotes()
 =SpoolOut()
 
 select csrTmpTBL
-set relation to str(TT_PERSID,8)+dtoc(TT_EFFDT) into qTmpTBL 
+set relation to str(TT_PERSID,8)+dtoc(TT_EFFDT)+trim(TT_INOUT) into qTmpTBL 
 
+store null to loCursor
 return 
 
 *=========================================================
@@ -138,11 +163,11 @@ store "" to lcSqlQuery
 text to lcSqlQuery textmerge noshow pretext 1+4 
 	--- Build temporary table to PIVOT data  
 	BEGIN
-		select a.TT_PERSID, 
-			a.TT_EFFDT, a.TT_OPT, a.TT__EURATE, 
+		select a.TT_PERSID, a.TT_EFFDT, a.TT_INOUT,
+			a.TT_OPT, a.TT__EURATE, 
 			SUM(a.TT__EUNIT) as TT__EUNIT,
-			MAX(a.TT_INOUT) as TT_INOUT, 
-			MAX(a.TT_NOTES) as TT_NOTES,
+			MAX(a.TT__ATY) as TT__ATY,
+			MAX(a.TT__LOC) as TT__LOC,
 			MAX(a.E_LNAME) as E_LNAME, 
 			MAX(a.E_FNAME) as E_FNAME, 
 			MAX(a.E_SIN) as E_SIN, 
@@ -162,14 +187,16 @@ text to lcSqlQuery textmerge noshow pretext 1+4
 				pers.E_ADDR1, pers.E_ADDR2, pers.E_CITY,
 				pers.E_PROV, pers.E_POSTCD, pers.E_COUNTRY,
 				pers.E_UNION, pers.E_JOBID, job.J_JOBTITLF,
-				timetmp.TT_EFFDT, timetmp.TT_INOUT,
+				timetmp.TT_EFFDT, 
+				[TT_INOUT]=cast(ltrim(rtrim(timetmp.TT_INOUT)) as varchar(25)),
 				timetmp.TT_UNIQID, timetmp.TT_OPT, 
 				timetmp.TT__EUNIT, timetmp.TT__EURATE,
 				CASE WHEN (tbl.tblTYPE='PRIME' AND tbl.TBLC6 IN('OUI','YES')) 
 					THEN CAST(1 AS NUMERIC(3,0)) 
 					ELSE CAST(0 AS NUMERIC(3,0)) 
 					END AS IsExpense,  
-				RTRIM(timetmp.TT_NOTES) as TT_NOTES
+				RTRIM(timetmp.TT__ATY) as TT__ATY,
+				RTRIM(timetmp.TT__LOC) as TT__LOC
 			FROM tbl
 			INNER JOIN timetmp ON tbl.TBLID = timetmp.TT_OPT
 			RIGHT OUTER JOIN PERS ON timetmp.TT_PERSID = PERS.E_PERSID
@@ -177,11 +204,12 @@ text to lcSqlQuery textmerge noshow pretext 1+4
 			WHERE (tbl.tblTYPE='PRIME' AND tbl.TBLC6 IN('OUI','YES'))
 				AND timetmp.TT_POSTBY = ''
 				PERSID_FILTER
+				BATCH_FILTER
 				PRIME_FILTER
 		) a 
 			where a.TT_EFFDT >= 'FROMDT_FILTER' 
 				and a.TT_EFFDT <= 'THRUDT_FILTER'
-		GROUP BY a.TT_PERSID, a.TT_EFFDT, a.TT_OPT, a.TT__EURATE
+		GROUP BY a.TT_PERSID, a.TT_EFFDT, a.TT_INOUT, a.TT_OPT, a.TT__EURATE
 	END
 endtext 
 
@@ -207,11 +235,12 @@ procedure CreatePIVOTTable(tnKeyNo, tcOPT)
 *
 local lnSelect, lnI, lnJ, lcField   
 local lcIdField, lcRateField, lcUnitField
-local lcInOutField, lcTotField, lcNoteField 
+local lcInOutField, lcTotField, lcActField, lcLocField
 
 store "" to lcField, lcInOutField, lcTotField
 store "" to lcIdField, lcRateField, lcUnitField 
-store "" to lcNoteField
+store "" to lcActField, lcLocField
+
 store 0 to lnI, lnJ
 
 lnSelect = select()
@@ -236,15 +265,17 @@ for lnJ = 1 to 25
 	lcRateField = "Rate" + lstr(lnJ)
 	lcUnitField = "Unit" + lstr(lnJ)
 	lcInOutField= "InOut" + lstr(lnJ)
-	lcTotField	= "Tot" + lstr(lnJ)
-	lcNoteField = "Note" + lstr(lnJ)
+	lcTotField = "Tot" + lstr(lnJ)
+	lcActField = "Activ" + lstr(lnJ)
+	lcLocField = "Locat" + lstr(lnJ)
 
 	alter table csrTmpTBL add column &lcIdField C(25)
 	alter table csrTmpTBL add column &lcRateField N(12,4)
 	alter table csrTmpTBL add column &lcUnitField N(12,4)
 	alter table csrTmpTBL add column &lcInOutField C(50)
 	alter table csrTmpTBL add column &lcTotField N(12,4)
-	alter table csrTmpTBL add column &lcNoteField M 
+	alter table csrTmpTBL add column &lcActField M 
+	alter table csrTmpTBL add column &lcLocField M 
 next 
 
 *** Create headers place holders for the report 
@@ -252,7 +283,6 @@ alter table csrTmpTBL add column cHeadId C(125)
 alter table csrTmpTBL add column cHeadR C(125)
 alter table csrTmpTBL add column FromTime C(10)
 alter table csrTmpTBL add column ThruTime C(10)
-alter table csrTmpTBL add column cNotes M 
 
 select qTmpTBL
 go top in qTmpTBL
@@ -262,7 +292,7 @@ return
 
 *=========================================================
 procedure FillPIVOTTable
-lparameters tcOPT,tcRateFld,tcUnitFld,tcInOutFld,tcNoteFld
+lparameters tcOPT,tcRateFld,tcUnitFld,tcInOutFld,tcActFld,tcLocFld
 *** The procedure has two tasks: 
 * 		1 - Populate the PIVOT cursor
 * 		2 - Builds the report header dynamically.
@@ -284,11 +314,12 @@ local lnSelect, lnI, lnK, lcField, lcInOutHHMM
 local lcHeadRate, lcHeadUnit, lcIdField, lcExpId
 local lnRate, lnUnit 
 local lcRateField, lcUnitField, lcInOutField
-local lcNoteField
+local lcActField, lcLocField, lcInOUT, lcInOUTVal
 
 store "" to lcHeadRate, lcHeadId, lcIdField, lcExpId
 store "" to lcRateField, lcUnitField, lcInOutField
-store "" to lcInOutHHMM, lcNoteField
+store "" to lcInOutHHMM, lcActField, lcLocField
+store "" to lcInOUT, lcInOUTVal
 store 0 to lnI, lnK, lnRate, lnUnit 
 
 lnSelect = select()
@@ -305,70 +336,92 @@ do while !eof()
 	lcPersId = trim(field(1))
 	lcEffDt = trim(field(2))
 
+	lcInOUT = trim(field(3))
+
 	lnK = 0 
 	lnI = 1 
 	lnPersId = nvl(evaluate(lcPersId),0)
 	do while evaluate(lcPersId) = lnPersId and !eof()
 
+		if lnI = 1 
+			lnJ = lnI
+		else
+			lnJ = 1 
+		endif 
+
 		ldEffDt = nvl(evaluate(lcEffDt),{})
 		do while evaluate(lcPersId) = lnPersId and ;
 			evaluate(lcEffDt) = ldEffDt and !eof()
 
-			select csrTmpTBL 
-			locate for evaluate(lcPersId) = lnPersId and ;
-					evaluate(lcEffDt) = ldEffDt and !eof()
-			if !found()
-				append blank in csrTmpTBL
-				replace (lcPersId) with lnPersId in csrTmpTBL
-				replace (lcEffDt) with ldEffDt  in csrTmpTBL
-			endif 
+			lcInOUTVal = nvl(evaluate(lcInOUT),"")
+			do while evaluate(lcPersId) = lnPersId and ;
+				evaluate(lcEffDt) = ldEffDt and ;
+				evaluate(lcInOUT) = lcInOUTVal and !eof()
 
-			*** Search for the expense ID 
-			lcExpId = evaluate("qTmpTBL."+tcOPT)
-			=GetIndexOffset(lnPersId, lcExpId, @lnI, @lnK)
+				select csrTmpTBL 
+				locate for evaluate(lcPersId) = lnPersId and ;
+						evaluate(lcEffDt) = ldEffDt and !eof()
+				if !found()
+					append blank in csrTmpTBL
+					replace (lcPersId) with lnPersId 	in csrTmpTBL
+					replace (lcEffDt) with ldEffDt  		in csrTmpTBL
+					replace (lcInOUT) with lcInOUTVal	in csrTmpTBL
+				endif 
+
+				*** Search for the expense ID 
+				lcExpId = evaluate("qTmpTBL."+tcOPT)
+				=GetIndexOffset(lnPersId, lcExpId, @lnI, @lnK)
+
+				select qTmpTBL
+				lcIdField = "Id" + lstr(lnI)
+				lcRateField = "Rate" + lstr(lnI)
+				lcUnitField = "Unit" + lstr(lnI)
+				lcInOutField = "InOut" + lstr(lnI)
+				lcActField = "Activ" + lstr(lnI)
+				lcLocField = "Locat" + lstr(lnI)
+				
+				select csrTmpTBL 		
+				replace (lcIdField)		with evaluate("qTmpTBL."+tcOPT) 
+				replace (lcRateField)	with evaluate("qTmpTBL."+tcRateFld)
+				replace (lcUnitField)	with evaluate("qTmpTBL."+tcUnitFld)
+				replace (lcActField)		with evaluate("qTmpTBL."+tcActFld)
+				replace (lcLocField)		with evaluate("qTmpTBL."+tcLocFld)
+
+				lcInOutHHMM = alltrim(evaluate("qTmpTBL."+tcInOutFld))
+				if !empty(lcInOutHHMM)
+					lcInOutHHMM = left(lcInOutHHMM,2) + ":" + ;
+							substr(lcInOutHHMM,3,5) + ":" + substr(lcInOutHHMM,8)
+				endif 
+				replace (lcInOutField)	with lcInOutHHMM 
+
+				select qTblHead
+				locate for PersId=lnPersId and trim(cId)=trim(lcExpId) and !eof()
+				if !found()
+					store 0 to lnRate, lnUnit 
+					lnRate = evaluate("csrTmpTBL." + lcRateField)
+					lnUnit = evaluate("csrTmpTBL." + lcUnitField)
+					
+					insert into qTblHead (PersId, cId, RateId, UnitId) ;
+						values (lnPersId, trim(evaluate("csrTmpTBL."+lcIdField)), ;
+									alltrim(str(lnRate,12,2)), alltrim(str(lnUnit,12,2)))
+				endif
+					
+				select qTmpTBL
+				skip 
+
+				lnJ = lnJ + 1 
+
+				if lnK > 0 
+					lnI = lnK 
+					lnJ = lnK 
+					lnK = 0 
+				else 	
+					lnI = lnI + 1 
+				endif
+			enddo
 
 			select qTmpTBL
-			lcIdField = "Id" + lstr(lnI)
-			lcRateField = "Rate" + lstr(lnI)
-			lcUnitField = "Unit" + lstr(lnI)
-			lcInOutField = "InOut" + lstr(lnI)
-			lcNoteField = "Note" + lstr(lnI)
-			
-			select csrTmpTBL 		
-			replace (lcIdField)		with evaluate("qTmpTBL."+tcOPT) 
-			replace (lcRateField)	with evaluate("qTmpTBL."+tcRateFld)
-			replace (lcUnitField)	with evaluate("qTmpTBL."+tcUnitFld)
-			replace (lcNoteField)	with evaluate("qTmpTBL."+tcNoteFld)
-
-			lcInOutHHMM = alltrim(evaluate("qTmpTBL."+tcInOutFld))
-			if !empty(lcInOutHHMM)
-				lcInOutHHMM = left(lcInOutHHMM,2) + ":" + ;
-						substr(lcInOutHHMM,3,5) + ":" + substr(lcInOutHHMM,8)
-			endif 
-			replace (lcInOutField)	with lcInOutHHMM 
-
-			select qTblHead
-			locate for PersId=lnPersId and trim(cId)=trim(lcExpId) and !eof()
-			if !found()
-				store 0 to lnRate, lnUnit 
-				lnRate = evaluate("csrTmpTBL." + lcRateField)
-				lnUnit = evaluate("csrTmpTBL." + lcUnitField)
-				
-				insert into qTblHead (PersId, cId, RateId, UnitId) ;
-					values (lnPersId, trim(evaluate("csrTmpTBL."+lcIdField)), ;
-								alltrim(str(lnRate,12,2)), alltrim(str(lnUnit,12,2)))
-			endif
-				
-			select qTmpTBL
-			skip 
-			
-			if lnK > 0 
-				lnI = lnK 
-				lnK = 0 
-			else 	
-				lnI = lnI + 1 
-			endif 	
-		enddo
+		enddo 
 
 ***	set step on 
 		select qTmpTBL
@@ -513,35 +566,6 @@ do while !eof()
 			exit 
 		endif 	
 	next 
-
-	select csrTmpTBL
-	skip
-enddo 					
-
-return
-
-*=========================================================
-procedure FillInNotes()
-*** Fill into a single field the value from TT_NOTES 
-* of an expense. We add all the strings values  
-* from all the subnotes fields "Note1..25" due to N..1 
-* relationship.
-* 
-local lcField, lcNotes
-store "" to lcField, lcNotes 
-*
-select csrTmpTBL
-go top in csrTmpTBL
-do while !eof()
-	store "" to lcNotes
-
-	for lnI = 1 to 25 
-		lcField = "Note" + lstr(lnI) 
-		if !empty(evaluate(lcField))
-			lcNotes = lcNotes + alltrim(evaluate(lcField)) + " "
-		endif 	
-	next 
-	replace next 1 cNotes with lcNotes in csrTmpTBL
 
 	select csrTmpTBL
 	skip

@@ -53,27 +53,27 @@
 *** Properties:
 
 cPrimeOPT = ""
-cJobCatId = ""									&& Filter for Job Category 
+cJobCatId = ""										&& Filter for Job Category 
 
-nRndUpShiftStartMM = 0		 				&& Before the shift starts round up 
-nRndDownShiftStartMM = 0	 				&& After the shift starts round down  
-nRndUpLunchStartMM = 0 						&& Before lunch starts round up 
-nRndDownLunchStartMM = 0 					&& After lunch started round down
-nRndUpLunchEndMM = 0 						&& Before lunch ends round up   
-nRndDownLunchEndMM = 0	 					&& After lunch ends round down 
-nRndUpShiftEndMM = 0			 				&& Before the shift ends round up 
-nRndDownShiftEndMM = 0	 					&& After the shift ends round down  
-nRndDownShiftStartLatencyMM = 0			&& Shift latency round down  
+nRndUpShiftStartMM = 0		 					&& Before the shift starts round up 
+nRndDownShiftStartMM = 0	 					&& After the shift starts round down  
+nRndUpLunchStartMM = 0 							&& Before lunch starts round up 
+nRndDownLunchStartMM = 0 						&& After lunch started round down
+nRndUpLunchEndMM = 0 							&& Before lunch ends round up   
+nRndDownLunchEndMM = 0	 						&& After lunch ends round down 
+nRndUpShiftEndMM = 0			 					&& Before the shift ends round up 
+nRndDownShiftEndMM = 0	 						&& After the shift ends round down  
+nRndDownShiftStartLatencyMM = 0				&& Shift latency round down  
 
-cBANK_REALTIME_ENTITLEMENT="1,2,5,7"	&& Banks real time entitlement  
-cVIRTUAL_BANK_DEPOSIT = "1"				&& Banks real time entitlement  
+cBANK_REALTIME_ENTITLEMENT="1,2,5,7"		&& Banks real time entitlement  
+cVIRTUAL_BANK_DEPOSIT = "1"					&& Banks real time entitlement  
 cDepositSurplusIntoBankids = "9"
 
-cLogStatus = "startlog.txt" 				&& triggers for start logging 
-cLogPath = "\TEMP\" 							&& log folder 
-_DEBUG = .T.									&& set .T. for debugging 
+cLogStatus = "startlog.txt" 					&& triggers for start logging 
+cLogPath = "\TEMP\" 								&& log folder 
+_DEBUG = .T.										&& set .T. for debugging 
 
-nRoundInOutTo = 0                   	&& default rounding  
+nRoundInOutTo = 0                   		&& default rounding  
 
 *=========================================================
 #define SCHEDULE_ROUNDING_SCHEMA_HOTFIX
@@ -667,7 +667,7 @@ select(lnSelect)
 return 
 
 *=========================================================
-procedure Postbatch_Deposits(tnPersId)
+procedure Postbatch_Deposits( tnPersId )
 * Allow the option to accumulate simultaneously 
 * into 1..N bank plans. 
 *
@@ -675,7 +675,7 @@ local lnSelect, llOk
 local lcDEST, lcOPT, lcTYPE, lcTSOURCE, lcBankSet
 local lnUnitRate, lnAMT, lnSenMths, lnSickBanksCnt
 local array laSickBank(1)
-local loSickBank, loSickParm
+local loSickBank, loSickParm, loPERS
 llOk = .t. 
 
 store "" to lcDEST, lcOPT, lcTYPE, lcBankSet
@@ -683,6 +683,8 @@ store 0 to lnAMT, lnUnitRate, lnSickBanksCnt, lnSenMths
 store null to loSickBank, loSickParm 
 
 with this 
+
+loPERS = .GetPERSObject(tnPersId)
 
 if !used("qAPLAN")
 	this.WriteLog("Postbatch_Deposits() - " + ;
@@ -692,9 +694,10 @@ endif
 
 lnSelect = Select()
 
+*** set step on 
 *** Get seniority months 
-if !empty(qJobhist.E_LASTHIRE)
-	lnSenMths = months(qJobhist.E_LASTHIRE, date()) 
+if !empty(loPERS.E_LASTHIRE)
+	lnSenMths = months(loPERS.E_LASTHIRE, date()) 
 endif 	
 
 *** Get all the plans from Jobhist 
@@ -722,8 +725,15 @@ if isnull(loSickBank) or type("loSickBank")!="O"
 	return
 endif 
 
+
 *** set step on 
 for lnJ = 1 to alen(laSickBank,1)
+	******* DEBUG *******
+	this.WriteLog("Postbatch_Deposits() - tnPersId" + transform(tnPersId))
+	this.WriteLog("Postbatch_Deposits() - " + ;
+			"Processing from laSickBank["+transform(lnJ)+ "] = " + ;	
+			transform(laSickBank[lnJ]))
+	******* DEBUG *******
 
 	*** Position record into qAPLAN 
 	select qAPLAN 
@@ -744,7 +754,7 @@ for lnJ = 1 to alen(laSickBank,1)
 
 	*** Set custom properties 
 	loSickParm.nPERSID = tnPersId 
-	if !this.SetSickObjectProperty(@loSickParm)
+	if !this.FillCustomObjectProperty(@loSickParm, loPERS)
 		loSickParm.cERROR = "ERROR: Setting up object custom property!"
 		exit 
 	endif 		
@@ -791,23 +801,7 @@ for lnJ = 1 to alen(laSickBank,1)
 			m.T_HOURS = nvl(loSickParm.nEntitleDays,0)
 		endif 
 
-		Insert Into vTimedt488 From Memvar
-
-		*** Deposit into virtual bank 
-		if lnJ = val(this.cVIRTUAL_BANK_DEPOSIT) ;
-		and !loSickParm.IsThe2ndPay
-
-			lnHoursOffBy = loSickParm.nTSWorkedHH - ;
-						loSickParm.nSchedHoursWKByPayPeriod
-
-			.WriteLog("Postbatch_Deposits()-lnHoursOffBy="+;
-				transform(lnHoursOffBy))
-			
-			if lnHoursOffBy != 0 
-				this.DepositIntoVirtualBank(lnHoursOffBy)
-				store 0 to lnHoursOffBy
-			endif 	
-		endif 
+		Insert Into vTimedt488 from memvar
 	endif 	
 
 	*** set step on 
@@ -818,13 +812,13 @@ next
 
 endwith 
 
-store null to loSickBank, loSickParm
+store null to loSickBank, loSickParm, loPERS
 
 select(lnSelect)
 return llOk 
 
 *==========================================================
-protected procedure SetSickObjectProperty(toRS)
+protected procedure FillCustomObjectProperty(toRS, toPERS)
 *** Populate the objects' constants 
 *
 local lnSelect, lcEXPR, loBizPayno, llOk
@@ -833,17 +827,17 @@ store null to loBizPayno
 llOk = .t. 
 
 if type("toRS")!="O" or isnull(toRS)
-	toRS.cERROR = "SetSickObjectProperty() - return 1"
+	toRS.cERROR = "FillCustomObjectProperty() - return 1"
 	return .f. 
 endif 
 
 if !used("vTimetmp")
-	toRS.cERROR = "SetSickObjectProperty() - return 2"
+	toRS.cERROR = "FillCustomObjectProperty() - return 2"
 	return .f. 
 endif 
 
 if !used("qBatch")
-	toRS.cERROR = "SetSickObjectProperty() - return 3"
+	toRS.cERROR = "FillCustomObjectProperty() - return 3"
 	return .f. 
 endif 
 
@@ -859,8 +853,16 @@ toRS.dTSEndDt = pdThru
 *** Get the right counter 
 toRS.cTCNT = toRS.cPlanId
 
+*** Get the cBatchNo
+toRS.cBatchNo = trim(vTimetmp.TT_BATCH)
+
 *** Get the original hire date 
-toRS.dOriginalHiredDt = qJobhist.E_ORIGHIRE
+toRS.dOriginalHiredDt = toPERS.E_ORIGHIRE
+
+*** JOBHIST pointer BUG   
+if !empty(toPERS.E_UNION)
+	toRS.cUnionId = toPERS.E_UNION
+endif 	
 
 *** Strip counter to use timetmp  
 lcEXPR = TCNTVAL("EXPR", toRS.cTCNT)
@@ -888,6 +890,12 @@ lcPayCycle = loBizPayno.GetValueById( ;
 
 toRS.cPayCycle = alltrim(lcPayCycle)
 toRS.IsThe2ndPay = (atw("2",toRS.cPayCycle)>0)
+toRS.cPayNo = alltrim(lcPayNo)
+if toRS.IsThe2ndPay 
+	toRS.nSFPQPayNo = ceiling(val(right(alltrim(lcPayNo),2))/2)
+else
+	toRS.nSFPQPayNo = floor(val(right(alltrim(lcPayNo),2))/2)
+endif 	
 
 store null to loBizPayno
 
@@ -912,7 +920,7 @@ endif
 lnSelect = select()
 
 for lnI = 1 to 9
-	lcPlanId = trim(evaluate("qJobhist.H_APLAN"+lstr(lnI)))
+	lcPlanId = trim(evaluate("qJobhist488.H_APLAN"+lstr(lnI)))
 	if !empty(lcPlanId)
 
 		select qAPLAN 
@@ -928,7 +936,7 @@ for lnI = 1 to 9
 		endif 
 	endif
 	
-	select qJobhist
+	select qJobhist488
 next
 
 if !empty(tcBankSet)
@@ -941,41 +949,6 @@ this.WriteLog("GetEmployeeSICKBanks() - " + ;
 
 select(lnSelect)
 return tcBankSet
-
-*======================================================================
-procedure DepositIntoVirtualBank (tnNumOfHours)
-*** Deposit the number of hours that are off 
-* in terms of employee's schedule into a virtual bank.
-* These hours are withdraw on the 2nd pay run 
-*
-local lnOk, lcSets, lcWhere, lnNumOfHours 
-local lcBankId, lcVirtualBankId, lnVirtualHRS  
-
-store "" to lcSets, lcWhere
-store "" to lcBankId, lcVirtualBankId
-store 0 to lnVirtualAMT 
-
-if empty(tnNumOfHours)
-	return 
-endif 	
-
-**** set step on 
-lcBankId = this.cDepositSurplusIntoBankids
-lcVirtualBankId = "V" + qJobhist.H_APLAN&lcBankId
-
-lnVirtualHRS = val(tbleval("MISCBANK",lcVirtualBankId,"TBLC7"))
-lnVirtualHRS = lnVirtualHRS + tnNumOfHours 
-
-*** debug 
-this.WriteLog("DepositIntoVirtualBank() = " + ;
-		"lnVirtualHRS = "+transform(lnVirtualHRS))
-
-lcSets = "TBLC7=" + lstr(lnVirtualHRS,2)+",TBLC6=''"
-lcWhere = "TBLTYPE='MISCBANK' AND TBLID='" + ;
-		alltrim(lcVirtualBankId) + "'"
-
-lnOk = goDataMgr.UpdateSQL("TBL", lcWhere, lcSets)
-return 
 
 *=========================================================
 procedure AnalyseInOut
@@ -1071,9 +1044,149 @@ addproperty(loR, "nRndDownShiftEndMM", 0)
 
 return loR
 
+*=========================================================
+procedure PostWeeklyExpenses(poThis)
+*** Posts the expenses on weekly basis. The procedure  
+* need to handle the posting only the first week, the 2nd 
+* week it is handle by the generic class.
+*
+* Developped by George and modified by Stefan 
+*
+local loR
+local lcWhere, ldFrom, ldThru, lnCount, lnTotAmt
+local llExpense, loViewTimetmp
+local llOk
+
+llOk = .t. 
+
+store "" to lcWhere, lcWhereBatch 
+store {} to ldFrom, ldThru
+store 0 to lnCount, lnTotAmt
+store null to loViewTimetmp
+
+*** Object to return to the behavoir 
+loR = createobject("empty")
+addproperty(loR, "nCount", 0)
+addproperty(loR, "nTotAMT", 0)
+addproperty(loR, "dFromDt", {})
+addproperty(loR, "dThruDt", {})
+addproperty(loR, "lOk", 0)
+
+if type("poThis") != "O"
+	return 
+endif 
+
+if empty(poThis.dFromDt)
+	return 
+endif 	
+
+*** set step on 
+*** Only the first week of the pay period 
+ldFrom = poThis.dFromDt
+ldThru = poThis.dFromDt + 6
+
+with this 
+
+lcWhere = Makefor("", lcWhere, ;
+				"TT_PERSID=" + lstr(poThis.PersId), ;
+				iif(empty(ldFrom), "", "TT_EFFDT>=" + ;
+						tochar(ldFrom, "/SQL/QUOTES")), ;
+				iif(empty(ldThru), "", "TT_EFFDT<=" + ;
+						tochar(ldThru, "/SQL/QUOTES")))
+
+lcWhereBatch = "TT_BATCH='" + trim(poThis.cBatch) + "'"+ ;
+				 " and TT_POSTBY=' ' and TT_SIGNBY=' '"
+
+lcWhere = Makefor("", lcWhere, lcWhereBatch)
+
+loViewTimeTmp = this.GetList( ;
+			"/view=qTTmp /PRIMARYKEY=TT_UNIQID", "", ;
+			lcWhere, ;
+			"TT_BATCH, TT_PERSID, TT_EFFDT")
+				
+*** Leave only Expenses the first week
+*	 Expenses = (OUI in TBLC6)
+*	 This week = Saturday to Friday period which includes date() 
+select qTTmp
+go top in qTTmp
+scan
+	llExpense = ToLogical(tbleval("PRIME", qTTmp.TT_OPT, "TBLC6"))
+
+	if llExpense
+		*** Flag as posted
+		replace TT_SIGNDTM with datetimex(), ;
+				  TT_SIGNBY  with gcUser, ;
+				  TT_HIST    with TT_HIST + CRLF + ;
+				  longdate(datetime()) + " - " + trim(gcUSER)
+
+		lnCount = lnCount + 1
+		lnTotAmt = lnTotAmt + (qTTmp.TT__EUNIT*qTTmp.TT__EURATE)
+	endif
+endscan
+	
+=therm(-2)
+	
+*** Save TIMETMP & TIMEDT
+llOk = (reccount("qTTmp")>0)
+llOk = iif(llOk, .Save("", loViewTimetmp), .f.)
+
+*** Save into the behaviour object 
+loR.nCount = lnCount 
+loR.nTotAMT = lnTotAmt 
+loR.dFromDt = ldFrom 
+loR.dThruDt = ldThru 
+loR.lOk = llOk
+
+endwith 
+
+store null to loViewTimeTmp
+return loR 
+
 *==========================================================
 protected procedure GetTimeBankCollectionObject()
 return this.oBankColl
+
+*=========================================================
+procedure GetPERSObject(tnPersId)
+*** This is needed since the cursor "qJobhist" which 
+* contains PERS & JOBHIST is out of sync with TIMETMP. 
+*
+local lnSelect
+local loBizPers, loCsrPers, loRS
+
+*** Object to return PERS fields  
+loRS = createobject("empty")
+addproperty(loRS, "E_PERSID", 0)
+addproperty(loRS, "E_LASTHIRE", {})
+addproperty(loRS, "E_ORIGHIRE", {})
+addproperty(loRS, "E_UNION", "")
+
+*** Get PERS 
+loBizPers = GetBiz("PERS")
+if isnull(loBizPers)
+	return null 
+endif 	
+
+lnSelect = select()
+
+loCsrPers = loBizPers.GetList ("/CURSOR=qPERS", ;
+		"E_PERSID, E_LASTHIRE, E_ORIGHIRE, E_UNION", ;
+		"E_PERSID = " + transform(tnPersId))
+
+if isnull(loCsrPers)
+	return null 
+endif 	
+
+loRS.E_PERSID = tnPersId
+loRS.E_LASTHIRE = qPERS.E_LASTHIRE
+loRS.E_ORIGHIRE = qPERS.E_ORIGHIRE
+loRS.E_UNION = qPERS.E_UNION
+
+use in select("qPERS")
+store null to loBizPers, loCsrPers
+
+select(lnSelect)
+return loRS
 
 *=========================================================
 procedure SpoolObjectProperties(toR As Object)

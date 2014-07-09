@@ -171,7 +171,7 @@ scan
 			BankName with tbleval("TIMEBANK", TS_BANKID), ;
 			PlanName with tbleval("APLAN", TS_PLANID)
 
-	replace TS_Earn with TS_Earn + ExtractFromVirtualBank(TS_PlanId) 
+*!*		replace TS_Earn with TS_Earn + ExtractFromVirtualBank(TS_PlanId) 
 
 	replace CarryTxt with ConvertTimsumUnits( ;
 				"", TS_Units, TS_Carry, TS_CarryD, lnHrsPdy)
