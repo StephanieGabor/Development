@@ -28,6 +28,8 @@ local lcPERSID, lcEXPENSE, lcWhere_PERSID, lcWhere_PRIME
 local llcWhere_BATCH, ldFrom, ldThru
 local loCursor
 
+private gnLastIndex 
+
 store "" to lcTBLTYPE, lcEXPENSE, lcPERSID, lcPRIMEID, lcSql
 store "" to lcPERSID, lcEXPENSE, lcWhere_PERSID, lcWhere_PRIME
 store "" to lcWhere_BATCH
@@ -35,6 +37,7 @@ store {} to ldFrom, ldThru
 store null to loCursor
 
 llDEBUG = .t. 				&& Save the cursors to TEMP directory  
+gnLastIndex = 0			&& Controls the static RPT index 
 
 therm(.02)
 
@@ -234,12 +237,12 @@ procedure CreatePIVOTTable(tnKeyNo, tcOPT)
 *            3 new fields (Id1..25, Rate1..25, Unit1..25)
 *
 local lnSelect, lnI, lnJ, lcField   
-local lcIdField, lcRateField, lcUnitField
+local lcIdField, lcRateField, lcUnitField, lcBkField
 local lcInOutField, lcTotField, lcActField, lcLocField
 
 store "" to lcField, lcInOutField, lcTotField
 store "" to lcIdField, lcRateField, lcUnitField 
-store "" to lcActField, lcLocField
+store "" to lcActField, lcLocField, lcBkField
 
 store 0 to lnI, lnJ
 
@@ -268,6 +271,7 @@ for lnJ = 1 to 25
 	lcTotField = "Tot" + lstr(lnJ)
 	lcActField = "Activ" + lstr(lnJ)
 	lcLocField = "Locat" + lstr(lnJ)
+	lcBkField = "Bank" + lstr(lnJ)
 
 	alter table csrTmpTBL add column &lcIdField C(25)
 	alter table csrTmpTBL add column &lcRateField N(12,4)
@@ -276,6 +280,7 @@ for lnJ = 1 to 25
 	alter table csrTmpTBL add column &lcTotField N(12,4)
 	alter table csrTmpTBL add column &lcActField M 
 	alter table csrTmpTBL add column &lcLocField M 
+	alter table csrTmpTBL add column &lcBkField C(25)
 next 
 
 *** Create headers place holders for the report 
@@ -313,13 +318,13 @@ lparameters tcOPT,tcRateFld,tcUnitFld,tcInOutFld,tcActFld,tcLocFld
 local lnSelect, lnI, lnK, lcField, lcInOutHHMM
 local lcHeadRate, lcHeadUnit, lcIdField, lcExpId
 local lnRate, lnUnit 
-local lcRateField, lcUnitField, lcInOutField
+local lcRateField, lcUnitField, lcInOutField, lcBkField
 local lcActField, lcLocField, lcInOUT, lcInOUTVal
 
 store "" to lcHeadRate, lcHeadId, lcIdField, lcExpId
 store "" to lcRateField, lcUnitField, lcInOutField
 store "" to lcInOutHHMM, lcActField, lcLocField
-store "" to lcInOUT, lcInOUTVal
+store "" to lcInOUT, lcInOUTVal, lcBkField
 store 0 to lnI, lnK, lnRate, lnUnit 
 
 lnSelect = select()
@@ -379,13 +384,15 @@ do while !eof()
 				lcInOutField = "InOut" + lstr(lnI)
 				lcActField = "Activ" + lstr(lnI)
 				lcLocField = "Locat" + lstr(lnI)
-				
+				lcBkField = "Bank" + lstr(lnI)
+
 				select csrTmpTBL 		
 				replace (lcIdField)		with evaluate("qTmpTBL."+tcOPT) 
 				replace (lcRateField)	with evaluate("qTmpTBL."+tcRateFld)
 				replace (lcUnitField)	with evaluate("qTmpTBL."+tcUnitFld)
 				replace (lcActField)		with evaluate("qTmpTBL."+tcActFld)
 				replace (lcLocField)		with evaluate("qTmpTBL."+tcLocFld)
+				replace (lcBkField)		with GetStaticRPTIndex()
 
 				lcInOutHHMM = alltrim(evaluate("qTmpTBL."+tcInOutFld))
 				if !empty(lcInOutHHMM)
@@ -488,6 +495,35 @@ endif
 
 select(lnSelect)		
 return 
+
+*=========================================================
+procedure GetStaticRPTIndex()
+*** Builds the static left site of the report 
+* 
+local lnSelect, lcRptHeader
+store "" to lcRptHeader
+
+lnSelect = select()
+
+do case 
+case gnLastIndex = 0
+	lcRptHeader = iif(gcLang="F", "Bureau","Office")
+	gnLastIndex = gnLastIndex + 1
+case gnLastIndex = 1
+	lcRptHeader = iif(gcLang="F", "Maladie","Sick")
+	gnLastIndex = gnLastIndex + 1
+case gnLastIndex = 2
+	lcRptHeader = iif(gcLang="F", "Vacances","Vaction")
+	gnLastIndex = gnLastIndex + 1
+case gnLastIndex = 3
+	lcRptHeader = iif(gcLang="F", "Autres","Other")
+	gnLastIndex = gnLastIndex + 1
+otherwise 
+	gnLastIndex = 0
+endcase
+	
+select(lnSelect)		
+return lcRptHeader
 
 *=========================================================
 procedure ComputeTotals()

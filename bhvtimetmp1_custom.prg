@@ -18,6 +18,10 @@
 *                    : timesheet details.
 *                    : 
 *
+*  Modification......: August - 2014 
+*                    : Remove the EXPENCES from totals 
+*
+*
 *#########################################################
 define class bhvTimeTmp1_custom ;
 		as bhvTimeTmp1 of bhvTimeTmp1.prg
@@ -78,7 +82,7 @@ cPg2Tot1_Caption = "REG"
 cPg2Tot2_Caption = "PRIME"
 cPg2Tot3_Caption = "ABS"
 cPg2Tot4_Caption = "TSUP"
-cPg2Tot5_Caption = "C/D"
+cPg2Tot5_Caption = "N/F"
 
 *-- Holiday Handling
 cPreloadHolidaysFor = ".t."				&& Logical expression
@@ -535,8 +539,12 @@ with poThis
 .Column7.Width = 55
 .Column8.Width = 55
 .Column9.Width = 55
+
 .Column10.Width = 55
+.Column10.InputMask = iif(this.lShowMgrPageAsHHMM, "XXXXXX", "9999.99")
+
 .Column11.Width = 55
+.Column11.InputMask = iif(this.lShowMgrPageAsHHMM, "XXXXXX", "9999.99")
 
 endwith 
 
@@ -626,8 +634,10 @@ replace all ;
 		BA_EXCEPTN with qbatch2.TT_EXCEPTN=1, ;
 		BA_POSTED with qbatch2.TT_POSTED
 
+* BA_TOT65 - expenses
+* It should not be included in the totals.
 replace all ;
-		BA_Total with BA_TOT1+BA_TOT2+BA_TOT3+BA_TOT4+BA_TOT5
+		BA_Total with BA_TOT1+BA_TOT2+BA_TOT3+BA_TOT4 && +BA_TOT5
 
 replace all ;
 		BA_TOT1HM  with HtoHM(BA_TOT1, 3, "/DELIM"), ;
@@ -675,6 +685,8 @@ return
 procedure LoadQBatch_Summarize()
 *** A separate method to facilitate overriding
 
+*** sum(TT__EUNIT*TT__EURATE) as TT_TOT5
+
 set enginebehavior 70
 select TT_PERSID, ;
 		 (TT_SIGNBY<>"") as TT_SIGNED, ;
@@ -685,7 +697,8 @@ select TT_PERSID, ;
 		 sum(iif("2"$TT_TBLC8, TT_HOURS, 0) + 000.00) as TT_TOT2, ;
 		 sum(iif("3"$TT_TBLC8, TT_HOURS, 0) + 000.00) as TT_TOT3, ;
 		 sum(iif("4"$TT_TBLC8, TT_HOURS, 0) + 000.00) as TT_TOT4, ;
-		 sum(TT__EUNIT*TT__EURATE) as TT_TOT5, ;
+		 sum(iif("5"$TT_TBLC8, ;
+		 	(nvl(TT__EUNIT,0)*nvl(TT__EURATE,0)),0)+000.00) as TT_TOT5, ;
 		 max(TT_MOTIF) as TT_MOTIF, ;
 		 max(TT_ENTITY) as TT_ENTITY, ;
 		 max(TT_JOBID) as TT_JOBID, ;

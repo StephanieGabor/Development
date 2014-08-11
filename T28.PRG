@@ -436,7 +436,7 @@ if !used("qFMS")
 	return 
 endif 
 
-*** Header only - do not added the record 
+*** Header only - do not add the record 
 if val(aTBArray[1]) = 0
 	return 
 endif 	
@@ -787,8 +787,8 @@ endproc
 
 *==========================================================
 procedure GetObjLabelText( pName )
-*** For know, hard coded the object's property description 
-* to be changed later - if used
+*** For now, hard code the object's property description 
+* to be changed later -
 *  
 if !used("qObjFields")
 	return 
